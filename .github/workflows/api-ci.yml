@@ -70,10 +70,19 @@ jobs:
           REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
           IMAGE_TAG: ${{ github.sha }}
         run: |
-          docker build -t $REGISTRY/$REPOSITORY:$IMAGE_TAG .
-          docker tag $REGISTRY/$REPOSITORY:$IMAGE_TAG $REGISTRY/$REPOSITORY:latest
-          docker push $REGISTRY/$REPOSITORY:$IMAGE_TAG
-          docker push $REGISTRY/$REPOSITORY:latest
+          set -e
+
+          echo "Registry: $REGISTRY"
+          echo "Repository: $REPOSITORY"
+          echo "Tag: $IMAGE_TAG"
+
+          IMAGE_URI="$REGISTRY/$REPOSITORY:$IMAGE_TAG"
+          IMAGE_LATEST="$REGISTRY/$REPOSITORY:latest"
+
+          docker build --file Dockerfile --tag "$IMAGE_URI" .
+          docker tag "$IMAGE_URI" "$IMAGE_LATEST"
+          docker push "$IMAGE_URI"
+          docker push "$IMAGE_LATEST"
 
   deploy:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
