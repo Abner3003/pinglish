@@ -64,13 +64,19 @@ jobs:
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
+      - name: Configurar Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Build, tag e push da imagem
         env:
           REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
           IMAGE_TAG: ${{ github.sha }}
         run: |
-          set -e
+          set -euo pipefail
+          : "${REGISTRY:?REGISTRY não definido}"
+          : "${REPOSITORY:?REPOSITORY não definido}"
+          : "${IMAGE_TAG:?IMAGE_TAG não definido}"
 
           echo "Registry: $REGISTRY"
           echo "Repository: $REPOSITORY"
@@ -79,10 +85,12 @@ jobs:
           IMAGE_URI="$REGISTRY/$REPOSITORY:$IMAGE_TAG"
           IMAGE_LATEST="$REGISTRY/$REPOSITORY:latest"
 
-          docker build --file Dockerfile --tag "$IMAGE_URI" .
-          docker tag "$IMAGE_URI" "$IMAGE_LATEST"
-          docker push "$IMAGE_URI"
-          docker push "$IMAGE_LATEST"
+          docker buildx build \
+            --file Dockerfile \
+            --tag "$IMAGE_URI" \
+            --tag "$IMAGE_LATEST" \
+            --push \
+            .
 
   deploy:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
