@@ -104,10 +104,15 @@ jobs:
     steps:
       - name: Configurar SSH
         run: |
+          set -euo pipefail
+          : "${{ secrets.EC2_HOST }}"
+          : "${{ secrets.EC2_USER }}"
+          : "${{ secrets.EC2_SSH_KEY }}"
+
           mkdir -p ~/.ssh
-          printf "%s" "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/id_rsa
+          printf "%s\n" "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
-          ssh-keyscan -H ${{ secrets.EC2_HOST }} >> ~/.ssh/known_hosts
+          ssh-keyscan -T 30 -H "${{ secrets.EC2_HOST }}" >> ~/.ssh/known_hosts
 
       - name: Deploy na EC2
         env:
