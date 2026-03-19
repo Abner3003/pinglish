@@ -127,10 +127,14 @@ jobs:
 
             aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin \$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
 
+            docker system prune -a -f
+            docker volume prune -f
+
             docker pull \$IMAGE_URI
 
             docker stop pinglish-api || true
             docker rm pinglish-api || true
+            docker image prune -f
 
             docker run -d \
               --name pinglish-api \
