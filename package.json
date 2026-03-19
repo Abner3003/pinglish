@@ -6,8 +6,10 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "dev": "tsx watch src/server.ts",
+    "dev:worker": "tsx watch src/jobs/leads-events.consumer.ts",
     "build": "npm run prisma:generate && tsc -p tsconfig.json && mkdir -p dist/generated && cp -R src/generated/prisma dist/generated/prisma",
     "start": "node dist/server.js",
+    "start:worker": "node dist/jobs/leads-events.consumer.js",
     "prisma: migrate": "prisma migrate dev",
     "prisma:generate": "prisma generate",
     "lint": "eslint . --ext .ts,.js"
@@ -28,6 +30,7 @@
     "fastify-type-provider-zod": "^6.1.0",
     "pg": "^8.16.3",
     "prisma": "^7.5.0",
+    "twilio": "^5.13.0",
     "zod": "^4.3.6"
   },
   "devDependencies": {

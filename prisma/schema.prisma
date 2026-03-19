@@ -18,3 +18,25 @@ model Lead {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 }
+
+enum EventProcessingStatus {
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+model EventProcessing {
+  id          String                @id @default(uuid())
+  consumer    String
+  eventId     String
+  eventType   String
+  aggregateId String?
+  status      EventProcessingStatus
+  attempts    Int                   @default(1)
+  error       String?
+  createdAt   DateTime              @default(now())
+  updatedAt   DateTime              @updatedAt
+
+  @@unique([consumer, eventId])
+  @@index([status])
+}

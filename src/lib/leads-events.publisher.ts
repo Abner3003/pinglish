@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-unused-vars */
 import { SendMessageCommand, SQSClient } from "@aws-sdk/client-sqs";
 import { env } from "../config/env.js";
+import { createLeadCreatedEvent } from "../modules/leads/leads.events.js";
 import type { Lead } from "../modules/leads/leads.types.js";
 
 export interface LeadsEventsPublisher {
@@ -24,20 +25,7 @@ export class SqsLeadsEventsPublisher implements LeadsEventsPublisher {
   }
 
   async publishLeadCreated(lead: Lead): Promise<void> {
-    const body = JSON.stringify({
-      type: "lead.created",
-      occurredAt: new Date().toISOString(),
-      lead: {
-        id: lead.id,
-        name: lead.name,
-        email: lead.email,
-        phone: lead.phone,
-        focus: lead.focus,
-        interests: lead.interests,
-        acceptedTermsAt: lead.acceptedTermsAt.toISOString(),
-        createdAt: lead.createdAt.toISOString(),
-      },
-    });
+    const body = JSON.stringify(createLeadCreatedEvent(lead));
 
     const isFifoQueue = this.queueUrl.endsWith(".fifo");
 
