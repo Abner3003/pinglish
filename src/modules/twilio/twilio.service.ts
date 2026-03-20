@@ -6,6 +6,7 @@ type Logger = Pick<typeof console, "info" | "warn" | "error">;
 type SendWelcomeMessageInput = {
   to: string;
   firstName?: string | null;
+  interestAreas: string []
 };
 
 export interface WelcomeMessenger {
@@ -21,12 +22,14 @@ export class NoopWelcomeMessenger implements WelcomeMessenger {
   async sendWelcomeMessage(input: SendWelcomeMessageInput): Promise<{
     sid: string | null;
     status: string | null;
+    interestAreas: string []
+
   }> {
     this.logger.warn(
       `[leads-worker] twilio is not configured, skipping welcome message to=${input.to}`,
     );
 
-    return { sid: null, status: null };
+    return { sid: null, status: null, interestAreas:[] };
   }
 }
 
@@ -47,9 +50,9 @@ export class TwilioWelcomeMessenger implements WelcomeMessenger {
     const to = this.normalizeWhatsappNumber(input.to);
     const firstName = input.firstName?.trim() || "there";
 
-    const body =
-      `Olá ${firstName}! Bem vindo ao Penglish 🎉 ` +
-      "Serei seu parceiro nessa caminhada ardua e divertida de aprender um novo idioma.";
+    const body = `Olá, ${firstName}! Seja muito bem-vindo ao Penglish 🎉
+    Vi que você se interessa por temas como: ${input.interestAreas}.
+    Vou ser seu parceiro nessa jornada de aprender inglês de um jeito mais leve, prático e divertido.`;
 
     const message = await this.client.messages.create({
       from: this.normalizeWhatsappNumber(env.TWILIO_WHATSAPP_FROM!),
@@ -74,8 +77,22 @@ export class TwilioWelcomeMessenger implements WelcomeMessenger {
     }
 
     const cleaned = phone.replace(/[^\d+]/g, "");
+    const digits = cleaned.startsWith("+") ? cleaned.slice(1) : cleaned;
 
-    return `whatsapp:${cleaned}`;
+    if (cleaned.startsWith("+")) {
+      return `whatsapp:${cleaned}`;
+    }
+
+    // Accept Brazilian local numbers and normalize them to E.164.
+    if (digits.length === 10 || digits.length === 11) {
+      return `whatsapp:+55${digits}`;
+    }
+
+    if (digits.startsWith("55") && (digits.length === 12 || digits.length === 13)) {
+      return `whatsapp:+${digits}`;
+    }
+
+    return `whatsapp:+${digits}`;
   }
 }
 

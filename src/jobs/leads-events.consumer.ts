@@ -41,6 +41,7 @@ class LeadCreatedHandler {
     await this.welcomeMessenger.sendWelcomeMessage({
       to: event.lead.phone,
       firstName: event.lead.name,
+      interestAreas: event.lead.interests
     });
 
     this.logger.info(
