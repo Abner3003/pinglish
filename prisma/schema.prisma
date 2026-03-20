@@ -19,6 +19,8 @@ model Lead {
   updatedAt       DateTime @updatedAt
 
   responses       LeadResponse[]
+  onboardingStep OnboardingStep @default(WAITING_OPT_IN)
+
 }
 
 enum EventProcessingStatus {
@@ -43,16 +45,25 @@ model EventProcessing {
   @@index([status])
 }
 
+enum OnboardingStep {
+  WAITING_OPT_IN
+  ASK_PROFESSION
+  ASK_GOAL
+  ASK_INTERESTS
+  DONE
+}
+
 model LeadResponse {
-  id           String   @id @default(uuid())
-  leadId       String
-  direction    String
-  channel      String
-  content      String
-  externalFrom String
-  createdAt    DateTime @default(now())
+  id                      String   @id @default(uuid())
+  leadId                  String
+  direction               String
+  channel                 String
+  content                 String
+  externalFrom            String
+  createdAt               DateTime @default(now())
 
   lead         Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
 
   @@index([leadId])
 }
+

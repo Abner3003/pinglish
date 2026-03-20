@@ -11,11 +11,9 @@ import {
 import { env } from "../config/env.js";
 import { prisma } from "../lib/prisma.js";
 import {
-  leadCreatedEventSchema,
-  type LeadCreatedEvent,
-} from "../modules/leads/leads.events.js";
-import type { WelcomeMessenger } from "../modules/twilio/twilio.interfaces.js";
-import { buildWelcomeMessenger } from "../modules/twilio/twilio.service.js";
+  leadResponseCreatedEventSchema,
+  type LeadResponseCreatedEvent,
+} from "../modules/twilio/twilio.events.js";
 
 type Logger = Pick<typeof console, "info" | "warn" | "error">;
 
@@ -27,24 +25,14 @@ type ConsumerOptions = {
   lockTimeoutSeconds: number;
 };
 
-const LEADS_EVENTS_CONSUMER_NAME = "leads-events-worker";
+const INTERACTIONS_EVENTS_CONSUMER_NAME = "interactions-events-worker";
 
-class LeadCreatedHandler {
-  constructor(
-    private readonly logger: Logger,
-    private readonly welcomeMessenger: WelcomeMessenger,
-  ) {}
+class LeadResponseCreatedHandler {
+  constructor(private readonly logger: Logger) {}
 
-  async handle(event: LeadCreatedEvent): Promise<void> {
-    await this.welcomeMessenger.sendOnboardingMessage({
-      to: event.lead.phone,
-      firstName: event.lead.name,
-      interestAreas: event.lead.interests,
-      id: event.lead.id
-    });
-
+  async handle(event: LeadResponseCreatedEvent): Promise<void> {
     this.logger.info(
-      `[leads-worker] processed lead.created for ${event.lead.email} (${event.lead.id})`,
+      `[interactions-worker] processed lead-response.created id=${event.leadResponse.id} leadId=${event.leadResponse.leadId}`,
     );
   }
 }
@@ -60,14 +48,14 @@ class EventProcessingSemaphore {
     private readonly lockTimeoutSeconds: number,
   ) {}
 
-  async claim(event: LeadCreatedEvent): Promise<ClaimResult> {
+  async claim(event: LeadResponseCreatedEvent): Promise<ClaimResult> {
     try {
       await prisma.eventProcessing.create({
         data: {
           consumer: this.consumer,
           eventId: event.eventId,
           eventType: event.type,
-          aggregateId: event.lead.id,
+          aggregateId: event.leadResponse.leadId,
           status: EventProcessingStatus.PROCESSING,
           attempts: 1,
           error: null,
@@ -135,7 +123,7 @@ class EventProcessingSemaphore {
       : { kind: "already-processing" };
   }
 
-  async complete(event: LeadCreatedEvent): Promise<void> {
+  async complete(event: LeadResponseCreatedEvent): Promise<void> {
     await prisma.eventProcessing.updateMany({
       where: {
         consumer: this.consumer,
@@ -149,7 +137,7 @@ class EventProcessingSemaphore {
     });
   }
 
-  async fail(event: LeadCreatedEvent, error: unknown): Promise<void> {
+  async fail(event: LeadResponseCreatedEvent, error: unknown): Promise<void> {
     await prisma.eventProcessing.updateMany({
       where: {
         consumer: this.consumer,
@@ -179,14 +167,14 @@ class EventProcessingSemaphore {
   }
 }
 
-class SqsLeadsEventsConsumer {
+class SqsInteractionsEventsConsumer {
   private readonly client: SQSClient;
   private shouldStop = false;
 
   constructor(
     private readonly queueUrl: string,
     region: string,
-    private readonly handler: LeadCreatedHandler,
+    private readonly handler: LeadResponseCreatedHandler,
     private readonly semaphore: EventProcessingSemaphore,
     private readonly logger: Logger,
     private readonly options: ConsumerOptions,
@@ -195,7 +183,7 @@ class SqsLeadsEventsConsumer {
   }
 
   async start(): Promise<void> {
-    this.logger.info(`[leads-worker] polling ${this.queueUrl}`);
+    this.logger.info(`[interactions-worker] polling ${this.queueUrl}`);
 
     while (!this.shouldStop) {
       const messages = await this.receiveMessages();
@@ -214,7 +202,7 @@ class SqsLeadsEventsConsumer {
       }
     }
 
-    this.logger.info("[leads-worker] stopped");
+    this.logger.info("[interactions-worker] stopped");
   }
 
   stop(): void {
@@ -240,21 +228,23 @@ class SqsLeadsEventsConsumer {
     const receiptHandle = message.ReceiptHandle;
 
     if (!receiptHandle) {
-      this.logger.warn("[leads-worker] skipping message without receipt handle");
+      this.logger.warn(
+        "[interactions-worker] skipping message without receipt handle",
+      );
       return;
     }
 
-    let event: LeadCreatedEvent | null = null;
+    let event: LeadResponseCreatedEvent | null = null;
 
     try {
       const parsedBody = JSON.parse(message.Body ?? "");
-      event = leadCreatedEventSchema.parse(parsedBody);
+      event = leadResponseCreatedEventSchema.parse(parsedBody);
 
       const claim = await this.semaphore.claim(event);
 
       if (claim.kind === "duplicate-completed") {
         this.logger.info(
-          `[leads-worker] duplicate event ${event.eventId} already completed, deleting message`,
+          `[interactions-worker] duplicate event ${event.eventId} already completed, deleting message`,
         );
         await this.deleteMessage(receiptHandle);
         return;
@@ -262,7 +252,7 @@ class SqsLeadsEventsConsumer {
 
       if (claim.kind === "already-processing") {
         this.logger.info(
-          `[leads-worker] event ${event.eventId} is already being processed, keeping message in queue`,
+          `[interactions-worker] event ${event.eventId} is already being processed, keeping message in queue`,
         );
         return;
       }
@@ -272,13 +262,17 @@ class SqsLeadsEventsConsumer {
       await this.deleteMessage(receiptHandle);
     } catch (error) {
       if (error instanceof SyntaxError) {
-        this.logger.error("[leads-worker] invalid JSON payload, deleting message");
+        this.logger.error(
+          "[interactions-worker] invalid JSON payload, deleting message",
+        );
         await this.deleteMessage(receiptHandle);
         return;
       }
 
       if (error instanceof Error && error.name === "ZodError") {
-        this.logger.error("[leads-worker] invalid event contract, deleting message");
+        this.logger.error(
+          "[interactions-worker] invalid event contract, deleting message",
+        );
         await this.deleteMessage(receiptHandle);
         return;
       }
@@ -287,7 +281,9 @@ class SqsLeadsEventsConsumer {
         await this.semaphore.fail(event, error);
       }
 
-      this.logger.error("[leads-worker] handler failed, message will return to queue");
+      this.logger.error(
+        "[interactions-worker] handler failed, message will return to queue",
+      );
       this.logger.error(error);
     }
   }
@@ -304,41 +300,24 @@ class SqsLeadsEventsConsumer {
   private sleep(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
-
-  private tryParseEvent(body?: string): LeadCreatedEvent | null {
-    if (!body) {
-      return null;
-    }
-
-    try {
-      const json = JSON.parse(body);
-      const parsed = leadCreatedEventSchema.safeParse(json);
-      return parsed.success ? parsed.data : null;
-    } catch {
-      return null;
-    }
-  }
 }
 
 async function main(): Promise<void> {
-  if (!env.LEADS_EVENTS_QUEUE_URL || !env.AWS_REGION) {
+  if (!env.INTERACTIONS_EVENTS_QUEUE_URL || !env.AWS_REGION) {
     throw new Error(
-      "LEADS_EVENTS_QUEUE_URL and AWS_REGION must be configured to run the worker",
+      "INTERACTIONS_EVENTS_QUEUE_URL and AWS_REGION must be configured to run the worker",
     );
   }
 
   const logger: Logger = console;
-  const handler = new LeadCreatedHandler(
-    logger,
-    buildWelcomeMessenger(logger),
-  );
+  const handler = new LeadResponseCreatedHandler(logger);
   const semaphore = new EventProcessingSemaphore(
-    LEADS_EVENTS_CONSUMER_NAME,
+    INTERACTIONS_EVENTS_CONSUMER_NAME,
     env.EVENT_PROCESSING_LOCK_TIMEOUT_SECONDS,
   );
 
-  const consumer = new SqsLeadsEventsConsumer(
-    env.LEADS_EVENTS_QUEUE_URL,
+  const consumer = new SqsInteractionsEventsConsumer(
+    env.INTERACTIONS_EVENTS_QUEUE_URL,
     env.AWS_REGION,
     handler,
     semaphore,
@@ -353,25 +332,18 @@ async function main(): Promise<void> {
   );
 
   const shutdown = (signal: string) => {
-    logger.info(`[leads-worker] received ${signal}, shutting down`);
+    logger.info(`[interactions-worker] received ${signal}, shutting down`);
     consumer.stop();
   };
 
-  process.on("SIGINT", () => {
-    shutdown("SIGINT");
-  });
-
-  process.on("SIGTERM", () => {
-    shutdown("SIGTERM");
-  });
+  process.on("SIGINT", () => shutdown("SIGINT"));
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
 
   await consumer.start();
-  await prisma.$disconnect();
 }
 
-main().catch(async (error) => {
-  console.error("[leads-worker] fatal error");
+main().catch((error) => {
+  console.error("[interactions-worker] fatal error");
   console.error(error);
-  await prisma.$disconnect();
   process.exit(1);
 });

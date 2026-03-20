@@ -1,4 +1,5 @@
 import { prisma } from "../../lib/prisma.js";
+import type { OnboardingStep } from "../../generated/prisma/index.js";
 import type { LeadResponseEventPayload } from "./twilio.events.js";
 
 function normalizeBrazilPhone(phone: string): string {
@@ -23,6 +24,23 @@ type CreateLeadResponseInput = {
   channel: string;
   direction: string;
 };
+
+type GetOnboardingStatusByIdResult =
+  | { kind: "found"; lead: { id: string; onboardingStep: OnboardingStep } }
+  | { kind: "lead-not-found" };
+
+type GetLeadByIdResult =
+  | {
+      kind: "found";
+      lead: {
+        id: string;
+        name: string;
+        phone: string;
+        interests: string[];
+        onboardingStep: OnboardingStep;
+      };
+    }
+  | { kind: "lead-not-found" };
 
 export class TwilioRepository {
   async createInboundLeadResponse(
@@ -55,5 +73,65 @@ export class TwilioRepository {
     });
 
     return { kind: "saved", response };
+  }
+  async getOnboardingStatusById(
+    userId: string,
+  ): Promise<GetOnboardingStatusByIdResult> {
+    const lead = await prisma.lead.findUnique({
+      where: {
+        id: userId,
+      },
+      select: {
+        id: true,
+        onboardingStep: true,
+      },
+    });
+
+    if (!lead) {
+      return { kind: "lead-not-found" };
+    }
+
+    return { kind: "found", lead };
+  }
+
+  async getLeadById(userId: string): Promise<GetLeadByIdResult> {
+    const lead = await prisma.lead.findUnique({
+      where: {
+        id: userId,
+      },
+      select: {
+        id: true,
+        name: true,
+        phone: true,
+        interests: true,
+        onboardingStep: true,
+      },
+    });
+
+    if (!lead) {
+      return { kind: "lead-not-found" };
+    }
+
+    return { kind: "found", lead };
+  }
+
+  async updateOnboardingStepById(
+    userId: string,
+    onboardingStep: OnboardingStep,
+  ): Promise<GetOnboardingStatusByIdResult> {
+    const lead = await prisma.lead.update({
+      where: {
+        id: userId,
+      },
+      data: {
+        onboardingStep,
+      },
+      select: {
+        id: true,
+        onboardingStep: true,
+      },
+    });
+
+    return { kind: "found", lead };
   }
 }
