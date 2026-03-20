@@ -52,7 +52,9 @@ export class TwilioWelcomeMessenger implements WelcomeMessenger {
 
     const body = `Olá, ${firstName}! Seja muito bem-vindo ao Penglish 🎉
     Vi que você se interessa por temas como: ${input.interestAreas}.
-    Vou ser seu parceiro nessa jornada de aprender inglês de um jeito mais leve, prático e divertido.`;
+    Vou ser seu parceiro nessa jornada de aprender inglês de um jeito mais leve, prático e divertido.
+    Me conta uma coisa: em quais situações do dia a dia você mais gostaria de usar o inglês?
+    `;
 
     const message = await this.client.messages.create({
       from: this.normalizeWhatsappNumber(env.TWILIO_WHATSAPP_FROM!),

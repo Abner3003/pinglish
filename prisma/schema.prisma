@@ -17,6 +17,8 @@ model Lead {
   acceptedTermsAt DateTime
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
+
+  responses       LeadResponse[]
 }
 
 enum EventProcessingStatus {
@@ -39,4 +41,18 @@ model EventProcessing {
 
   @@unique([consumer, eventId])
   @@index([status])
+}
+
+model LeadResponse {
+  id           String   @id @default(uuid())
+  leadId       String
+  direction    String
+  channel      String
+  content      String
+  externalFrom String
+  createdAt    DateTime @default(now())
+
+  lead         Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  @@index([leadId])
 }

@@ -6,6 +6,7 @@ import { errorHandlerPlugin } from "./plugins/error-handler.js";
 import { healthRoutes } from "./modules/health/health.routes.js";
 import { userRoutes } from "./modules/users/user.routes.js";
 import { leadsRoutes } from "./modules/leads/leads.router.js";
+import { TwilioRoutes } from "./modules/twilio/twilio.routes.js";
 import {
   serializerCompiler,
   validatorCompiler,
@@ -29,6 +30,7 @@ export function buildApp(){
   app.register(healthRoutes);
   app.register(userRoutes, {prefix:"/users"});
   app.register(leadsRoutes, {prefix:"/leads"});
+  app.register(TwilioRoutes);
 
   return app;
 }

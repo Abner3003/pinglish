@@ -9,6 +9,7 @@ const EnvSchema = z.object({
   DATABASE_URL: z.string().optional(),
   AWS_REGION: z.string().optional(),
   LEADS_EVENTS_QUEUE_URL: z.string().optional(),
+  INTERACTIONS_EVENTS_QUEUE_URL: z.string().optional(),
   SQS_MAX_NUMBER_OF_MESSAGES: z.coerce.number().int().min(1).max(10).default(10),
   SQS_WAIT_TIME_SECONDS: z.coerce.number().int().min(0).max(20).default(20),
   SQS_VISIBILITY_TIMEOUT_SECONDS: z.coerce.number().int().min(0).optional(),
