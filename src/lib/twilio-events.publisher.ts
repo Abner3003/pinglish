@@ -13,6 +13,7 @@ export class NoopTwilioEventsPublisher implements TwilioEventsPublisher {
   async publishLeadResponseCreated(
     _response: LeadResponseEventPayload,
   ): Promise<void> {
+    console.log(_response);
     return;
   }
 }
