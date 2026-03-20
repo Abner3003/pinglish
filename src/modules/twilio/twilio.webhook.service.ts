@@ -28,6 +28,13 @@ export class TwilioWebhookService {
     const lead = await this.repository.getLeadById(result.response.leadId);
 
     if (lead.kind === "found" && input.content.trim().length > 0) {
+      await this.repository.createContextEntry({
+        leadId: lead.lead.id,
+        leadResponseId: result.response.id,
+        content: input.content.trim(),
+        onboardingStep: lead.lead.onboardingStep,
+      });
+
       const nextStep = this.getNextOnboardingStep(lead.lead.onboardingStep);
 
       await this.repository.updateOnboardingStepById(lead.lead.id, nextStep);

@@ -19,6 +19,7 @@ model Lead {
   updatedAt       DateTime @updatedAt
 
   responses       LeadResponse[]
+  contextEntries  LeadContextEntry[]
   onboardingStep OnboardingStep @default(WAITING_OPT_IN)
 
 }
@@ -54,16 +55,35 @@ enum OnboardingStep {
 }
 
 model LeadResponse {
-  id                      String   @id @default(uuid())
-  leadId                  String
-  direction               String
-  channel                 String
-  content                 String
-  externalFrom            String
-  createdAt               DateTime @default(now())
+  id           String   @id @default(uuid())
+  leadId       String
+  direction    String
+  channel      String
+  content      String
+  externalFrom String
+  createdAt    DateTime @default(now())
 
-  lead         Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  lead           Lead               @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  contextEntries LeadContextEntry[]
 
   @@index([leadId])
 }
 
+model LeadContextEntry {
+  id             String         @id @default(uuid())
+  leadId         String
+  leadResponseId String?        @unique
+  source         LeadContextSource
+  content        String
+  onboardingStep OnboardingStep
+  createdAt      DateTime       @default(now())
+
+  lead         Lead          @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  leadResponse LeadResponse? @relation(fields: [leadResponseId], references: [id], onDelete: SetNull)
+
+  @@index([leadId, createdAt])
+}
+
+enum LeadContextSource {
+  WHATSAPP_INBOUND
+}

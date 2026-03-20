@@ -1,5 +1,5 @@
 import { prisma } from "../../lib/prisma.js";
-import type { OnboardingStep } from "../../generated/prisma/index.js";
+import { LeadContextSource, type OnboardingStep } from "../../generated/prisma/index.js";
 import type { LeadResponseEventPayload } from "./twilio.events.js";
 
 function normalizeBrazilPhone(phone: string): string {
@@ -133,5 +133,22 @@ export class TwilioRepository {
     });
 
     return { kind: "found", lead };
+  }
+
+  async createContextEntry(input: {
+    leadId: string;
+    leadResponseId: string;
+    content: string;
+    onboardingStep: OnboardingStep;
+  }): Promise<void> {
+    await prisma.leadContextEntry.create({
+      data: {
+        leadId: input.leadId,
+        leadResponseId: input.leadResponseId,
+        source: LeadContextSource.WHATSAPP_INBOUND,
+        content: input.content,
+        onboardingStep: input.onboardingStep,
+      },
+    });
   }
 }
