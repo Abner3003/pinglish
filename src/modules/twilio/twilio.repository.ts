@@ -2,8 +2,12 @@ import { prisma } from "../../lib/prisma.js";
 import { LeadContextSource, type OnboardingStep } from "../../generated/prisma/index.js";
 import type { LeadResponseEventPayload } from "./twilio.events.js";
 
+function stripWhatsappPrefix(phone: string): string {
+  return phone.replace(/^whatsapp:/i, "");
+}
+
 function normalizeBrazilPhone(phone: string): string {
-  const cleaned = phone.replace(/[^\d+]/g, "");
+  const cleaned = stripWhatsappPrefix(phone).replace(/[^\d+]/g, "");
   const digits = cleaned.startsWith("+") ? cleaned.slice(1) : cleaned;
 
   if (digits.length === 10 || digits.length === 11) {
@@ -15,6 +19,24 @@ function normalizeBrazilPhone(phone: string): string {
   }
 
   return cleaned.startsWith("+") ? cleaned : `+${digits}`;
+}
+
+function buildPhoneLookupCandidates(phone: string): string[] {
+  const raw = phone.trim();
+  const withoutPrefix = stripWhatsappPrefix(raw);
+  const normalized = normalizeBrazilPhone(raw);
+  const digits = normalized.replace(/\D/g, "");
+  const nationalDigits = digits.startsWith("55") ? digits.slice(2) : digits;
+
+  return [...new Set([
+    raw,
+    withoutPrefix,
+    normalized,
+    `whatsapp:${normalized}`,
+    digits,
+    nationalDigits,
+    `+${digits}`,
+  ])].filter(Boolean);
 }
 
 type CreateLeadResponseInput = {
@@ -49,9 +71,13 @@ export class TwilioRepository {
     | { kind: "saved"; response: LeadResponseEventPayload }
     | { kind: "lead-not-found" }
   > {
+    const phoneCandidates = buildPhoneLookupCandidates(input.phone);
+
     const lead = await prisma.lead.findFirst({
       where: {
-        phone: normalizeBrazilPhone(input.phone),
+        OR: phoneCandidates.map((candidate) => ({
+          phone: candidate,
+        })),
       },
       select: {
         id: true,
