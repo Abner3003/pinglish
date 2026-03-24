@@ -129,6 +129,11 @@ jobs:
 
             docker pull \$IMAGE_URI
 
+            docker run --rm \
+              --env-file /opt/pinglish/.env \
+              \$IMAGE_URI \
+              npx prisma migrate deploy
+
             docker stop pinglish-api pinglish-worker-leads pinglish-worker-interactions || true
             docker rm pinglish-api pinglish-worker-leads pinglish-worker-interactions || true
             docker image prune -f
