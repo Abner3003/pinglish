@@ -127,13 +127,10 @@ jobs:
 
             aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin \$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
 
-            docker system prune -a -f
-            docker volume prune -f
-
             docker pull \$IMAGE_URI
 
-            docker stop pinglish-api || true
-            docker rm pinglish-api || true
+            docker stop pinglish-api pinglish-worker-leads pinglish-worker-interactions || true
+            docker rm pinglish-api pinglish-worker-leads pinglish-worker-interactions || true
             docker image prune -f
 
             docker run -d \
@@ -142,4 +139,18 @@ jobs:
               -p 3000:3000 \
               --env-file /opt/pinglish/.env \
               \$IMAGE_URI
+
+            docker run -d \
+              --name pinglish-worker-leads \
+              --restart always \
+              --env-file /opt/pinglish/.env \
+              \$IMAGE_URI \
+              node dist/jobs/leads-events.consumer.js
+
+            docker run -d \
+              --name pinglish-worker-interactions \
+              --restart always \
+              --env-file /opt/pinglish/.env \
+              \$IMAGE_URI \
+              node dist/jobs/interactions-events.consumer.js
           EOF
