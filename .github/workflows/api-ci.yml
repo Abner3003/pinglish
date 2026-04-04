@@ -135,16 +135,19 @@ jobs:
 
             aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin \$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
 
+            docker stop pinglish-api pinglish-worker-leads pinglish-worker-interactions || true
+            docker rm pinglish-api pinglish-worker-leads pinglish-worker-interactions || true
+            docker container prune -f || true
+            docker image prune -af || true
+            docker builder prune -af || true
+            docker volume prune -f || true
+
             docker pull \$IMAGE_URI
 
             docker run --rm \
               --env-file /opt/pinglish/.env \
               \$IMAGE_URI \
               npx prisma migrate deploy
-
-            docker stop pinglish-api pinglish-worker-leads pinglish-worker-interactions || true
-            docker rm pinglish-api pinglish-worker-leads pinglish-worker-interactions || true
-            docker image prune -f
 
             docker run -d \
               --name pinglish-api \
