@@ -8,20 +8,98 @@ datasource db {
 }
 
 model Lead {
-  id              String   @id @default(uuid())
+  id              String         @id @default(uuid())
+  professionalId  String?
   name            String
-  email           String   @unique
+  email           String         @unique
   phone           String
   focus           String
   interests       String[]
   acceptedTermsAt DateTime
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
 
+  professional    Professional?  @relation(fields: [professionalId], references: [id], onDelete: SetNull)
   responses       LeadResponse[]
   contextEntries  LeadContextEntry[]
-  onboardingStep OnboardingStep @default(WAITING_OPT_IN)
+  planLinks       PlanLead[]
+  seat            Seat?
+  onboardingStep  OnboardingStep @default(WAITING_OPT_IN)
 
+  @@index([professionalId])
+}
+
+model Professional {
+  id                   String             @id @default(uuid())
+  name                 String
+  email                String             @unique
+  phone                String
+  stripeCustomerId     String?            @unique
+  stripeSubscriptionId String?            @unique
+  status               ProfessionalStatus @default(ACTIVE)
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+
+  leads                Lead[]
+  plans                Plan[]
+  portalAccessRequests PortalAccessRequest[]
+  seats                Seat[]
+}
+
+model PortalAccessRequest {
+  id             String        @id @default(uuid())
+  professionalId String?
+  name           String
+  email          String
+  phone          String
+  couponCode     String?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  professional   Professional? @relation(fields: [professionalId], references: [id], onDelete: SetNull)
+
+  @@index([email])
+  @@index([professionalId])
+}
+
+model Plan {
+  id             String        @id @default(uuid())
+  professionalId String?
+  stripePlanId   String        @unique
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  professional   Professional? @relation(fields: [professionalId], references: [id], onDelete: SetNull)
+  leadLinks      PlanLead[]
+
+  @@index([professionalId])
+}
+
+model PlanLead {
+  id        String   @id @default(uuid())
+  planId    String
+  leadId    String
+  createdAt DateTime @default(now())
+
+  plan      Plan     @relation(fields: [planId], references: [id], onDelete: Cascade)
+  lead      Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  @@unique([planId, leadId])
+  @@index([leadId])
+}
+
+model Seat {
+  id             String     @id @default(uuid())
+  professionalId String
+  leadId         String?    @unique
+  status         SeatStatus @default(AVAILABLE)
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  professional   Professional @relation(fields: [professionalId], references: [id], onDelete: Cascade)
+  lead           Lead?        @relation(fields: [leadId], references: [id], onDelete: SetNull)
+
+  @@index([professionalId, status])
 }
 
 enum EventProcessingStatus {
@@ -86,4 +164,17 @@ model LeadContextEntry {
 
 enum LeadContextSource {
   WHATSAPP_INBOUND
+}
+
+enum SeatStatus {
+  AVAILABLE
+  ASSIGNED
+  DISABLED
+}
+
+enum ProfessionalStatus {
+  ACTIVE
+  INACTIVE
+  PAST_DUE
+  CANCELED
 }

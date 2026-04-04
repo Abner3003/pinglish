@@ -33,6 +33,24 @@ const phoneSchema = z
   })
   .transform(normalizeBrazilPhone);
 
+const professionalSchema = z.object({
+  name: z.string().min(1),
+  email: z.email(),
+  phone: phoneSchema,
+});
+
+export const portalAccessBodySchema = z.object({
+  name: z.string().min(1),
+  email: z.email(),
+  phone: phoneSchema,
+  couponCode: z.string().trim().min(1).optional(),
+  professional: professionalSchema.optional(),
+});
+
+export const portalAccessResponseSchema = z.object({
+  ok: z.boolean(),
+});
+
 export const signupBodySchema = z.object({
   name: z.string().min(1),
   email: z.email(),
@@ -40,6 +58,7 @@ export const signupBodySchema = z.object({
   consent: z.boolean(),
   phone: phoneSchema,
   goals: z.string().min(2).array().min(1),
+  professional: professionalSchema.optional(),
 });
 
 export const signupResponseSchema = z.object({
@@ -53,6 +72,7 @@ export const patchSignupBodySchema = z.object({
   consent: z.boolean(),
   phone: phoneSchema,
   goals: z.string().min(2).array().min(1),
+  professional: professionalSchema.optional(),
 });
 
 export const patchSignupResponseSchema = z.object({
@@ -63,3 +83,5 @@ export type SignupBody = z.infer<typeof signupBodySchema>;
 export type SignupResponse = z.infer<typeof signupResponseSchema>;
 export type PatchSignupBody = z.infer<typeof patchSignupBodySchema>;
 export type PatchSignupResponse = z.infer<typeof patchSignupResponseSchema>;
+export type PortalAccessBody = z.infer<typeof portalAccessBodySchema>;
+export type PortalAccessResponse = z.infer<typeof portalAccessResponseSchema>;

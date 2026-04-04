@@ -1,12 +1,20 @@
 import type { LeadsEventsPublisher } from "../../lib/leads-events.publisher.js";
 import type { LeadsRepository } from "./leads.repository.js";
-import type { CreateLeadInput, PatchLeadInput } from "./leads.types.js";
+import type {
+  CreateLeadInput,
+  CreatePortalAccessRequestInput,
+  PatchLeadInput,
+} from "./leads.types.js";
 
 export class LeadsService {
     constructor(
       private readonly repository: LeadsRepository,
       private readonly eventsPublisher: LeadsEventsPublisher,
     ) {}
+
+    async createPortalAccessRequest(data: CreatePortalAccessRequestInput) {
+        return this.repository.createPortalAccessRequest(data);
+    }
 
     async create(data: CreateLeadInput) {
         const existing = await this.repository.findByEmail(data.email);

@@ -158,4 +158,9 @@ jobs:
               --env-file /opt/pinglish/.env \
               \$IMAGE_URI \
               node dist/jobs/interactions-events.consumer.js
+
+            docker container prune -f
+            docker image prune -af
+            docker builder prune -af
+            docker volume prune -f
           EOF
