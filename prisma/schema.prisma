@@ -34,6 +34,12 @@ model Professional {
   name                 String
   email                String             @unique
   phone                String
+  document             String?            @unique
+  businessName         String?
+  planId               String?
+  city                 String?
+  state                String?
+  age                  Int?
   stripeCustomerId     String?            @unique
   stripeSubscriptionId String?            @unique
   status               ProfessionalStatus @default(ACTIVE)
@@ -44,6 +50,59 @@ model Professional {
   plans                Plan[]
   portalAccessRequests PortalAccessRequest[]
   seats                Seat[]
+  kycProfessional      KycProfessional?
+}
+
+model User {
+  id            String        @id @default(uuid())
+  name          String
+  email         String        @unique
+  phone         String        @unique
+  planId        String?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  kycUser       KycUser?
+  userChannel   UserChannel?
+}
+
+model KycUser {
+  id                  String   @id @default(uuid())
+  userId              String   @unique
+  personalPreferences String[]
+  language            String
+  languageLevel       String
+  city                String
+  state               String
+  age                 Int
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model KycProfessional {
+  id             String   @id @default(uuid())
+  professionalId String   @unique
+  document       String
+  city           String
+  state          String
+  age            Int
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  professional Professional @relation(fields: [professionalId], references: [id], onDelete: Cascade)
+}
+
+model UserChannel {
+  id              String            @id @default(uuid())
+  userId          String            @unique
+  status          UserChannelStatus  @default(ONBOARDING)
+  onboardingStep  Int               @default(1)
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 model PortalAccessRequest {
@@ -65,7 +124,11 @@ model PortalAccessRequest {
 model Plan {
   id             String        @id @default(uuid())
   professionalId String?
-  stripePlanId   String        @unique
+  name           String
+  description    String
+  price          Float
+  features       String[]
+  stripePlanId   String?       @unique
   createdAt      DateTime      @default(now())
   updatedAt      DateTime      @updatedAt
 
@@ -73,6 +136,16 @@ model Plan {
   leadLinks      PlanLead[]
 
   @@index([professionalId])
+}
+
+model Coupon {
+  id         String   @id @default(uuid())
+  name       String   @unique
+  discount   Float
+  validUntil DateTime
+  quantity   Int
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
 }
 
 model PlanLead {
@@ -177,4 +250,11 @@ enum ProfessionalStatus {
   INACTIVE
   PAST_DUE
   CANCELED
+}
+
+enum UserChannelStatus {
+  OPT_IN
+  OPT_OUT
+  ONBOARDING
+  OTHER
 }

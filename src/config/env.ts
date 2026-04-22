@@ -25,6 +25,10 @@ const EnvSchema = z.object({
   TWILIO_STATUS_CALLBACK_URL: z.string().url().optional(),
   TWILIO_WHATSAPP_DONE_CONTENT_SID: z.string().min(1).optional(),
   TWILIO_WHATSAPP_JOURNEY_URL: z.string().url().optional(),
+  WHATSAPP_VERIFY_TOKEN: z.string().min(1).optional(),
+  WHATSAPP_TOKEN: z.string().min(1).optional(),
+  PHONE_NUMBER_ID: z.string().min(1).optional(),
+  GRAPH_API_VERSION: z.string().min(1).default("v22.0"),
 });
 
 export const env = EnvSchema.parse(process.env);

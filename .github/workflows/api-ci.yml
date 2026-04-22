@@ -70,6 +70,44 @@ jobs:
       - name: Configurar Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      - name: Validar configuração do ECR
+        env:
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${AWS_REGION:-}" ]; then
+            echo "::error title=AWS_REGION ausente::O secret AWS_REGION está vazio ou não foi definido."
+            exit 1
+          fi
+
+          if [ -z "${REGISTRY:-}" ]; then
+            echo "::error title=Registry ausente::O login no ECR não retornou registry. Verifique as credenciais AWS e a action amazon-ecr-login."
+            exit 1
+          fi
+
+          if [ -z "${REPOSITORY:-}" ]; then
+            echo "::error title=ECR_REPOSITORY ausente::O secret ECR_REPOSITORY está vazio ou não foi definido."
+            exit 1
+          fi
+
+          if ! aws sts get-caller-identity >/dev/null 2>&1; then
+            echo "::error title=AWS inválida::Não foi possível validar as credenciais AWS no runner."
+            exit 1
+          fi
+
+          if ! aws ecr describe-repositories --region "$AWS_REGION" --repository-names "$REPOSITORY" >/dev/null 2>&1; then
+            echo "::error title=Repositório ECR não encontrado::O repositório '$REPOSITORY' não existe na região '$AWS_REGION' para a conta AWS configurada no workflow."
+            exit 1
+          fi
+
+          echo "ECR validado com sucesso:"
+          echo "  region=$AWS_REGION"
+          echo "  registry=$REGISTRY"
+          echo "  repository=$REPOSITORY"
+
       - name: Build, tag e push da imagem
         env:
           REGISTRY: ${{ steps.login-ecr.outputs.registry }}
@@ -77,16 +115,28 @@ jobs:
           IMAGE_TAG: ${{ github.sha }}
         run: |
           set -euo pipefail
-          : "${REGISTRY:?REGISTRY não definido}"
-          : "${REPOSITORY:?REPOSITORY não definido}"
-          : "${IMAGE_TAG:?IMAGE_TAG não definido}"
 
-          echo "Registry: $REGISTRY"
-          echo "Repository: $REPOSITORY"
-          echo "Tag: $IMAGE_TAG"
+          if [ -z "${REGISTRY:-}" ]; then
+            echo "::error title=Registry ausente::A action de login no ECR não retornou um registry válido."
+            exit 1
+          fi
+
+          if [ -z "${REPOSITORY:-}" ]; then
+            echo "::error title=ECR_REPOSITORY ausente::O secret ECR_REPOSITORY está vazio ou não foi definido."
+            exit 1
+          fi
+
+          if [ -z "${IMAGE_TAG:-}" ]; then
+            echo "::error title=IMAGE_TAG ausente::O SHA do commit não foi definido no job docker."
+            exit 1
+          fi
 
           IMAGE_URI="$REGISTRY/$REPOSITORY:$IMAGE_TAG"
           IMAGE_LATEST="$REGISTRY/$REPOSITORY:latest"
+
+          echo "Buildando imagens:"
+          echo "  image_uri=$IMAGE_URI"
+          echo "  image_latest=$IMAGE_LATEST"
 
           docker buildx build \
             --file Dockerfile \
@@ -128,10 +178,71 @@ jobs:
           ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
           IMAGE_TAG: ${{ github.sha }}
         run: |
+          set -euo pipefail
+
+          if [ -z "${EC2_HOST:-}" ]; then
+            echo "::error title=EC2_HOST ausente::O secret EC2_HOST está vazio ou não foi definido."
+            exit 1
+          fi
+
+          if [ -z "${EC2_USER:-}" ]; then
+            echo "::error title=EC2_USER ausente::O secret EC2_USER está vazio ou não foi definido."
+            exit 1
+          fi
+
+          if [ -z "${AWS_REGION:-}" ]; then
+            echo "::error title=AWS_REGION ausente::O secret AWS_REGION está vazio ou não foi definido."
+            exit 1
+          fi
+
+          if [ -z "${ECR_REPOSITORY:-}" ]; then
+            echo "::error title=ECR_REPOSITORY ausente::O secret ECR_REPOSITORY está vazio ou não foi definido."
+            exit 1
+          fi
+
+          if [ -z "${IMAGE_TAG:-}" ]; then
+            echo "::error title=IMAGE_TAG ausente::O SHA do commit não foi definido no job deploy."
+            exit 1
+          fi
+
+          echo "Iniciando deploy:"
+          echo "  ec2_host=$EC2_HOST"
+          echo "  aws_region=$AWS_REGION"
+          echo "  ecr_repository=$ECR_REPOSITORY"
+          echo "  image_tag=$IMAGE_TAG"
+
           ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new "$EC2_USER@$EC2_HOST" << EOF
-            set -e
+            set -euo pipefail
+
+            if [ -z "${AWS_REGION:-}" ]; then
+              echo "ERRO: AWS_REGION não chegou à sessão remota."
+              exit 1
+            fi
+
+            if [ -z "${ECR_REPOSITORY:-}" ]; then
+              echo "ERRO: ECR_REPOSITORY não chegou à sessão remota."
+              exit 1
+            fi
+
+            if [ -z "${IMAGE_TAG:-}" ]; then
+              echo "ERRO: IMAGE_TAG não chegou à sessão remota."
+              exit 1
+            fi
+
             AWS_ACCOUNT_ID=\$(aws sts get-caller-identity --query Account --output text)
             IMAGE_URI=\$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:$IMAGE_TAG
+
+            echo "Preparando pull da imagem:"
+            echo "  aws_account_id=\$AWS_ACCOUNT_ID"
+            echo "  aws_region=$AWS_REGION"
+            echo "  ecr_repository=$ECR_REPOSITORY"
+            echo "  image_tag=$IMAGE_TAG"
+            echo "  image_uri=\$IMAGE_URI"
+
+            if ! aws ecr describe-repositories --region $AWS_REGION --repository-names $ECR_REPOSITORY >/dev/null 2>&1; then
+              echo "ERRO: O repositório ECR '$ECR_REPOSITORY' não existe ou não está acessível na região '$AWS_REGION' a partir da EC2."
+              exit 1
+            fi
 
             aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin \$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
 
@@ -142,6 +253,7 @@ jobs:
             docker builder prune -af || true
             docker volume prune -f || true
 
+            echo "Executando docker pull de \$IMAGE_URI"
             docker pull \$IMAGE_URI
 
             docker run --rm \
