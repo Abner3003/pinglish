@@ -7,7 +7,7 @@ CREATE TABLE "League" (
     "rank" "LeagueRank" NOT NULL,
     "xpTotalMin" INTEGER NOT NULL,
     "xpTotalMax" INTEGER,
-    "xpInRank" INTEGER NOT NULL,
+    "xpInRank" INTEGER,
     "equivalentActionsApprox" INTEGER,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
