@@ -24,6 +24,10 @@ CREATE TABLE IF NOT EXISTS "League" (
 -- CreateIndex
 CREATE UNIQUE INDEX IF NOT EXISTS "League_rank_key" ON "League"("rank");
 
+-- Ensure existing partially applied table matches the nullable schema
+ALTER TABLE IF EXISTS "League"
+ALTER COLUMN "xpInRank" DROP NOT NULL;
+
 -- Seed default leagues
 INSERT INTO "League" ("id", "rank", "xpTotalMin", "xpTotalMax", "xpInRank", "equivalentActionsApprox", "createdAt", "updatedAt")
 VALUES
