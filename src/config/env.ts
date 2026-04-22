@@ -29,6 +29,12 @@ const EnvSchema = z.object({
   WHATSAPP_TOKEN: z.string().min(1).optional(),
   PHONE_NUMBER_ID: z.string().min(1).optional(),
   GRAPH_API_VERSION: z.string().min(1).default("v22.0"),
+  STUDY_PACK_SERVICE_BASE_URL: z.string().url().optional(),
+  STUDY_PACK_SERVICE_MOUNT_PATH: z.string().min(1).default("/mountPack"),
+  STUDY_PACK_SERVICE_GET_PACK_PATH: z.string().min(1).default("/getPackById"),
+  STUDY_PACK_SERVICE_TOKEN: z.string().min(1).optional(),
+  DEFAULT_TENANT_NAME: z.string().min(1).default("Penglish"),
+  DEFAULT_TENANT_SEGMENT: z.string().min(1).default("general"),
 });
 
 export const env = EnvSchema.parse(process.env);

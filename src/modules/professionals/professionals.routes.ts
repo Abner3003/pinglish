@@ -29,6 +29,19 @@ const professionalResponseSchema = z.object({
   professional: professionalRecordSchema,
 });
 
+const professionalInfoResponseSchema = z.object({
+  professional: professionalRecordSchema,
+  tenants: z.array(
+    z.object({
+      id: z.string().min(1),
+      name: z.string().min(1),
+      description: z.string().min(1),
+      segment: z.string().min(1),
+      educationalApproach: z.unknown(),
+    }),
+  ),
+});
+
 const notFoundResponseSchema = z.object({
   message: z.string(),
 });
@@ -148,6 +161,58 @@ export const professionalRoutes: FastifyPluginAsync = async (app) => {
 
       return {
         professional: toProfessionalRecord(professional),
+      };
+    },
+  );
+
+  typedApp.get(
+    "/:id/info",
+    {
+      schema: {
+        tags: ["Professionals"],
+        summary: "Get professional info with tenants",
+        params: idParamsSchema,
+        response: {
+          200: professionalInfoResponseSchema,
+          404: notFoundResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const professional = await prisma.professional.findUnique({
+        where: {
+          id: request.params.id,
+        },
+        select: {
+          id: true,
+          name: true,
+          document: true,
+          phone: true,
+          email: true,
+          businessName: true,
+          planId: true,
+          city: true,
+          state: true,
+          age: true,
+          tenants: {
+            select: {
+              id: true,
+              name: true,
+              description: true,
+              segment: true,
+              educationalApproach: true,
+            },
+          },
+        },
+      });
+
+      if (!professional) {
+        return reply.code(404).send({ message: "Professional not found" });
+      }
+
+      return {
+        professional: toProfessionalRecord(professional),
+        tenants: professional.tenants,
       };
     },
   );

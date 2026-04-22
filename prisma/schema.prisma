@@ -51,6 +51,7 @@ model Professional {
   portalAccessRequests PortalAccessRequest[]
   seats                Seat[]
   kycProfessional      KycProfessional?
+  tenants              Tenant[]
 }
 
 model User {
@@ -59,11 +60,20 @@ model User {
   email         String        @unique
   phone         String        @unique
   planId        String?
+  leagueId      String?
   createdAt     DateTime      @default(now())
   updatedAt     DateTime      @updatedAt
 
   kycUser       KycUser?
   userChannel   UserChannel?
+  league        League?       @relation(fields: [leagueId], references: [id], onDelete: SetNull)
+  userJourney   UserJourney?
+  learningProfile LearningProfile?
+  learningStates UserLearningState[]
+  studyPacks    DailyStudyPack[]
+  studyEvents    StudyEvent[]
+
+  @@index([leagueId])
 }
 
 model KycUser {
@@ -72,9 +82,10 @@ model KycUser {
   personalPreferences String[]
   language            String
   languageLevel       String
-  city                String
-  state               String
-  age                 Int
+  goal                LearningGoal?
+  city                String?
+  state               String?
+  age                 Int?
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
 
@@ -95,12 +106,17 @@ model KycProfessional {
 }
 
 model UserChannel {
-  id              String            @id @default(uuid())
-  userId          String            @unique
-  status          UserChannelStatus  @default(ONBOARDING)
-  onboardingStep  Int               @default(1)
-  createdAt       DateTime          @default(now())
-  updatedAt       DateTime          @updatedAt
+  id                  String            @id @default(uuid())
+  userId              String            @unique
+  status              UserChannelStatus  @default(ONBOARDING)
+  onboardingStep      Int               @default(1)
+  awaitingStudyReply  Boolean           @default(false)
+  currentPackId       String?
+  currentStudyItemId  String?
+  lastInboundAt       DateTime?
+  lastOutboundAt      DateTime?
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
@@ -146,6 +162,160 @@ model Coupon {
   quantity   Int
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
+}
+
+model League {
+  id                     String      @id @default(uuid())
+  rank                   LeagueRank  @unique
+  xpTotalMin             Int
+  xpTotalMax             Int?
+  xpInRank               Int?
+  equivalentActionsApprox Int?
+  createdAt              DateTime    @default(now())
+  updatedAt              DateTime    @updatedAt
+
+  users                  User[]
+  userJourneys           UserJourney[]
+}
+
+model Tenant {
+  id                  String   @id @default(uuid())
+  professionalId      String
+  name                String
+  description         String
+  segment             String
+  educationalApproach  Json
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  professional        Professional @relation(fields: [professionalId], references: [id], onDelete: Cascade)
+  learningItems       LearningItem[]
+  learningProfiles    LearningProfile[]
+
+  @@index([professionalId])
+}
+
+model UserJourney {
+  id             String            @id @default(uuid())
+  userId         String            @unique
+  level          UserJourneyLevel
+  leagueId       String
+  score          Int               @default(0)
+  lastUpdatedAt  DateTime          @updatedAt
+  createdAt      DateTime          @default(now())
+
+  user           User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  league         League            @relation(fields: [leagueId], references: [id], onDelete: Restrict)
+
+  @@index([leagueId])
+}
+
+model LearningProfile {
+  id                 String           @id @default(uuid())
+  userId             String           @unique
+  tenantId           String?
+  timezone           String
+  nativeLanguage     String
+  targetLanguage     String
+  goal               LearningGoal
+  interests          String[]
+  profession         String?
+  preferredStudyTime String?
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+
+  user               User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tenant             Tenant?          @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId])
+}
+
+model LearningItem {
+  id                   String           @id @default(uuid())
+  tenantId             String
+  type                 LearningItemType
+  text                 String
+  meaning              String
+  difficulty           Int
+  tags                 String[]
+  prerequisiteItemIds  String[]
+  relatedItemIds       String[]
+  metadata             Json
+  createdAt            DateTime         @default(now())
+  updatedAt            DateTime         @updatedAt
+
+  tenant               Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  userStates           UserLearningState[]
+  studyEvents          StudyEvent[]
+
+  @@index([tenantId])
+  @@index([type])
+}
+
+model UserLearningState {
+  id                   String                 @id @default(uuid())
+  userId               String
+  itemId               String
+  status               UserLearningStateStatus @default(NEW)
+  easeFactor           Float                  @default(2.5)
+  intervalDays         Int                    @default(0)
+  repetitionCount      Int                    @default(0)
+  lastReviewedAt       DateTime?
+  nextReviewAt         DateTime?
+  lapses               Int                    @default(0)
+  consecutiveCorrect   Int                    @default(0)
+  consecutiveWrong     Int                    @default(0)
+  masteryScore         Int                    @default(0)
+  createdAt            DateTime               @default(now())
+  updatedAt            DateTime               @updatedAt
+
+  user                 User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  item                 LearningItem           @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, itemId])
+  @@index([userId])
+  @@index([itemId])
+  @@index([nextReviewAt])
+}
+
+model DailyStudyPack {
+  id             String          @id @default(uuid())
+  userId         String
+  date           DateTime
+  generatedAt    DateTime        @default(now())
+  items          Json
+  targetXp       Int
+  completed      Boolean         @default(false)
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  studyEvents    StudyEvent[]
+
+  @@unique([userId, date])
+  @@index([userId, date])
+}
+
+model StudyEvent {
+  id             String         @id @default(uuid())
+  userId         String
+  itemId         String
+  packId         String?
+  eventType      StudyEventType
+  answerQuality  Int?
+  isCorrect      Boolean?
+  xpEarned       Int?
+  occurredAt     DateTime       @default(now())
+  createdAt      DateTime       @default(now())
+
+  user           User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  item           LearningItem   @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  pack           DailyStudyPack? @relation(fields: [packId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([itemId])
+  @@index([packId])
+  @@index([occurredAt])
 }
 
 model PlanLead {
@@ -257,4 +427,51 @@ enum UserChannelStatus {
   OPT_OUT
   ONBOARDING
   OTHER
+}
+
+enum LeagueRank {
+  D
+  C
+  B
+  A
+  S
+  SS
+}
+
+enum UserJourneyLevel {
+  INICIANTE
+  PRE_INTERMEDIARIO
+  INTERMEDIARIO
+  AVANCADO
+  PROFICIENTE
+}
+
+enum LearningGoal {
+  TRAVEL
+  WORK
+  CONVERSATION
+  SCHOOL
+  OTHER
+}
+
+enum LearningItemType {
+  LEXICAL_CHUNK
+  PATTERN
+  EXAMPLE
+  MICRO_LESSON
+}
+
+enum UserLearningStateStatus {
+  NEW
+  LEARNING
+  REVIEW
+  MASTERED
+  SUSPENDED
+}
+
+enum StudyEventType {
+  ANSWERED
+  REVIEWED
+  SKIPPED
+  LESSON_COMPLETED
 }

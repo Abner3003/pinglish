@@ -3,6 +3,7 @@ import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import { z } from "zod";
 import { prisma } from "../../lib/prisma.js";
 import { phoneSchema } from "../shared/phone.js";
+import { resolveDefaultTenantId } from "../tenants/default-tenant.service.js";
 
 const idParamsSchema = z.object({
   id: z.string().min(1),
@@ -22,6 +23,58 @@ const userListResponseSchema = z.object({
 
 const userResponseSchema = z.object({
   user: userRecordSchema,
+});
+
+const userInfoResponseSchema = z.object({
+  user: userRecordSchema,
+  learningProfile: z
+    .object({
+      id: z.string().min(1),
+      tenantId: z.string().nullable(),
+      timezone: z.string().min(1),
+      nativeLanguage: z.string().min(1),
+      targetLanguage: z.string().min(1),
+      goal: z.enum(["TRAVEL", "WORK", "CONVERSATION", "SCHOOL", "OTHER"]),
+      interests: z.array(z.string().min(1)),
+      profession: z.string().nullable(),
+      preferredStudyTime: z.string().nullable(),
+    })
+    .nullable(),
+});
+
+const userHierarchyResponseSchema = z.object({
+  user: userRecordSchema,
+  hasProfessionalAbove: z.boolean(),
+  tenant: z
+    .object({
+      id: z.string().min(1),
+      name: z.string().min(1),
+      description: z.string().min(1),
+      segment: z.string().min(1),
+      educationalApproach: z.unknown(),
+      professionalId: z.string().min(1),
+      professional: z.object({
+        id: z.string().min(1),
+        name: z.string().min(1),
+        email: z.email(),
+        phone: z.string().min(1),
+      }),
+    })
+    .nullable(),
+  directives: z.unknown().nullable(),
+  learningProfile: z
+    .object({
+      id: z.string().min(1),
+      tenantId: z.string().nullable(),
+      timezone: z.string().min(1),
+      nativeLanguage: z.string().min(1),
+      targetLanguage: z.string().min(1),
+      goal: z.enum(["TRAVEL", "WORK", "CONVERSATION", "SCHOOL", "OTHER"]),
+      interests: z.array(z.string().min(1)),
+      profession: z.string().nullable(),
+      preferredStudyTime: z.string().nullable(),
+    })
+    .nullable(),
 });
 
 const notFoundResponseSchema = z.object({
@@ -129,6 +182,171 @@ export const userRoutes: FastifyPluginAsync = async (app) => {
 
       return {
         user: toUserRecord(user),
+      };
+    },
+  );
+
+  typedApp.get(
+    "/:id/info",
+    {
+      schema: {
+        tags: ["Users"],
+        summary: "Get user info with learning profile",
+        params: idParamsSchema,
+        response: {
+          200: userInfoResponseSchema,
+          404: notFoundResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const user = await prisma.user.findUnique({
+        where: {
+          id: request.params.id,
+        },
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          phone: true,
+          planId: true,
+          learningProfile: {
+            select: {
+              id: true,
+              tenantId: true,
+              timezone: true,
+              nativeLanguage: true,
+              targetLanguage: true,
+              goal: true,
+              interests: true,
+              profession: true,
+              preferredStudyTime: true,
+            },
+          },
+        },
+      });
+
+      if (!user) {
+        return reply.code(404).send({ message: "User not found" });
+      }
+
+      return {
+        user: toUserRecord(user),
+        learningProfile: user.learningProfile
+          ? {
+              id: user.learningProfile.id,
+              tenantId: user.learningProfile.tenantId,
+              timezone: user.learningProfile.timezone,
+              nativeLanguage: user.learningProfile.nativeLanguage,
+              targetLanguage: user.learningProfile.targetLanguage,
+              goal: user.learningProfile.goal,
+              interests: user.learningProfile.interests,
+              profession: user.learningProfile.profession,
+              preferredStudyTime: user.learningProfile.preferredStudyTime,
+            }
+          : null,
+      };
+    },
+  );
+
+  typedApp.get(
+    "/:id/hierarchy",
+    {
+      schema: {
+        tags: ["Users"],
+        summary: "Get user hierarchy with tenant and professional directives",
+        params: idParamsSchema,
+        response: {
+          200: userHierarchyResponseSchema,
+          404: notFoundResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const user = await prisma.user.findUnique({
+        where: {
+          id: request.params.id,
+        },
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          phone: true,
+          planId: true,
+          learningProfile: {
+            select: {
+              id: true,
+              tenantId: true,
+              timezone: true,
+              nativeLanguage: true,
+              targetLanguage: true,
+              goal: true,
+              interests: true,
+              profession: true,
+              preferredStudyTime: true,
+            },
+          },
+        },
+      });
+
+      if (!user) {
+        return reply.code(404).send({ message: "User not found" });
+      }
+
+      const resolvedTenantId = user.learningProfile?.tenantId ?? (await resolveDefaultTenantId());
+
+      const tenant = resolvedTenantId
+        ? await prisma.tenant.findUnique({
+            where: {
+              id: resolvedTenantId,
+            },
+            select: {
+              id: true,
+              name: true,
+              description: true,
+              segment: true,
+              educationalApproach: true,
+              professionalId: true,
+              professional: {
+                select: {
+                  id: true,
+                  name: true,
+                  email: true,
+                  phone: true,
+                },
+              },
+            },
+          })
+        : null;
+
+      return {
+        user: toUserRecord(user),
+        hasProfessionalAbove: Boolean(tenant?.professionalId),
+        tenant: tenant
+          ? {
+              id: tenant.id,
+              name: tenant.name,
+              description: tenant.description,
+              segment: tenant.segment,
+              educationalApproach: tenant.educationalApproach,
+              professionalId: tenant.professionalId,
+              professional: tenant.professional,
+            }
+          : null,
+        directives: tenant?.educationalApproach ?? null,
+        learningProfile: user.learningProfile
+          ? {
+              id: user.learningProfile.id,
+              tenantId: user.learningProfile.tenantId,
+              timezone: user.learningProfile.timezone,
+              nativeLanguage: user.learningProfile.nativeLanguage,
+              targetLanguage: user.learningProfile.targetLanguage,
+              goal: user.learningProfile.goal,
+              interests: user.learningProfile.interests,
+              profession: user.learningProfile.profession,
+              preferredStudyTime: user.learningProfile.preferredStudyTime,
+            }
+          : null,
       };
     },
   );

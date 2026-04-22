@@ -14,6 +14,15 @@ import { userChannelRoutes } from "./modules/user-channels/user-channels.routes.
 import { onboardingRoutes } from "./modules/onboarding/onboarding.routes.js";
 import { TwilioRoutes } from "./modules/twilio/twilio.routes.js";
 import { metaWhatsAppRoutes } from "./modules/meta-whatsapp/meta-whatsapp.routes.js";
+import { leagueRoutes } from "./modules/leagues/leagues.routes.js";
+import { userJourneyRoutes } from "./modules/user-journeys/user-journeys.routes.js";
+import { tenantRoutes } from "./modules/tenants/tenants.routes.js";
+import { learningProfileRoutes } from "./modules/learning-profiles/learning-profiles.routes.js";
+import { learningItemsRoutes } from "./modules/learning-items/learning-items.routes.js";
+import { userLearningStateRoutes } from "./modules/user-learning-states/user-learning-states.routes.js";
+import { dailyStudyPackRoutes } from "./modules/daily-study-packs/daily-study-packs.routes.js";
+import { studyEventRoutes } from "./modules/study-events/study-events.routes.js";
+import { learningResponseRoutes } from "./modules/learning-response/learning-response.routes.js";
 import {
   serializerCompiler,
   validatorCompiler,
@@ -45,6 +54,15 @@ export function buildApp(){
   app.register(onboardingRoutes);
   app.register(TwilioRoutes);
   app.register(metaWhatsAppRoutes);
+  app.register(leagueRoutes, {prefix:"/leagues"});
+  app.register(userJourneyRoutes, {prefix:"/user-journeys"});
+  app.register(tenantRoutes, {prefix:"/tenants"});
+  app.register(learningProfileRoutes, {prefix:"/learning-profiles"});
+  app.register(learningItemsRoutes, {prefix:"/learning-items"});
+  app.register(userLearningStateRoutes, {prefix:"/user-learning-states"});
+  app.register(dailyStudyPackRoutes, {prefix:"/daily-study-packs"});
+  app.register(studyEventRoutes, {prefix:"/study-events"});
+  app.register(learningResponseRoutes, {prefix:"/learning-response"});
 
   return app;
 }

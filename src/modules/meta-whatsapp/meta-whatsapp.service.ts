@@ -1,4 +1,11 @@
+import {
+  LearningGoal,
+  UserChannelStatus,
+} from "../../generated/prisma/index.js";
+import { prisma } from "../../lib/prisma.js";
 import { env } from "../../config/env.js";
+import { resolveDefaultTenantId } from "../tenants/default-tenant.service.js";
+import { studyOrchestratorService } from "../study-orchestrator/study-orchestrator.module.js";
 
 type Logger = Pick<typeof console, "info" | "warn" | "error">;
 
@@ -9,12 +16,206 @@ type InboundMessage = {
   text: string;
 };
 
+type OnboardingAnswers = {
+  likes: string[];
+  themes: string[];
+  goal: LearningGoal;
+  languageLevel: string;
+  targetLanguage: string;
+};
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function getString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
+}
+
+function normalizePhoneNumber(phone: string): string {
+  return phone.replace(/[^\d]/g, "");
+}
+
+function normalizeText(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "");
+}
+
+function splitCommaList(value: string): string[] {
+  return value
+    .split(/[,;/\n]/g)
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
+function parseNumberedAnswers(text: string): Partial<Record<1 | 2 | 3 | 4 | 5, string>> {
+  const lines = text
+    .split(/\n+/g)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  const result: Partial<Record<1 | 2 | 3 | 4 | 5, string>> = {};
+
+  for (const line of lines) {
+    const match = line.match(/^(\d+)[.)\-\:]\s*(.+)$/);
+
+    if (!match) {
+      continue;
+    }
+
+    const index = Number(match[1]);
+    const value = match[2].trim();
+
+    if (index >= 1 && index <= 5) {
+      result[index as 1 | 2 | 3 | 4 | 5] = value;
+    }
+  }
+
+  return result;
+}
+
+function resolveGoal(value: string): LearningGoal {
+  const normalized = normalizeText(value);
+
+  if (
+    normalized.includes("travel") ||
+    normalized.includes("viagem") ||
+    normalized.includes("turismo")
+  ) {
+    return LearningGoal.TRAVEL;
+  }
+
+  if (
+    normalized.includes("work") ||
+    normalized.includes("trabalho") ||
+    normalized.includes("profissao")
+  ) {
+    return LearningGoal.WORK;
+  }
+
+  if (
+    normalized.includes("conversation") ||
+    normalized.includes("conversa") ||
+    normalized.includes("falar")
+  ) {
+    return LearningGoal.CONVERSATION;
+  }
+
+  if (
+    normalized.includes("school") ||
+    normalized.includes("estudo") ||
+    normalized.includes("aula") ||
+    normalized.includes("curso")
+  ) {
+    return LearningGoal.SCHOOL;
+  }
+
+  return LearningGoal.OTHER;
+}
+
+function resolveLevel(value: string): string {
+  const normalized = normalizeText(value);
+
+  if (normalized.includes("iniciante") || normalized.includes("beginner")) {
+    return "INICIANTE";
+  }
+
+  if (
+    normalized.includes("pre intermediario") ||
+    normalized.includes("pre-intermediario") ||
+    normalized.includes("pre intermed") ||
+    normalized.includes("pre-intermed")
+  ) {
+    return "PRE_INTERMEDIARIO";
+  }
+
+  if (normalized.includes("intermediario") || normalized.includes("intermediate")) {
+    return "INTERMEDIARIO";
+  }
+
+  if (normalized.includes("avancado") || normalized.includes("advanced")) {
+    return "AVANCADO";
+  }
+
+  return "PROFICIENTE";
+}
+
+function resolveTargetLanguage(value: string): string {
+  const normalized = normalizeText(value);
+
+  if (normalized.includes("ingles") || normalized.includes("english")) {
+    return "ENGLISH";
+  }
+
+  if (normalized.includes("espanhol") || normalized.includes("spanish")) {
+    return "SPANISH";
+  }
+
+  if (normalized.includes("frances") || normalized.includes("french")) {
+    return "FRENCH";
+  }
+
+  return value.trim().toUpperCase();
+}
+
+function parseOnboardingAnswers(text: string): OnboardingAnswers | null {
+  const numbered = parseNumberedAnswers(text);
+  const fallbackLines = text
+    .split(/\n+/g)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .filter((line) => !/^(\d+)[.)\-\:]/.test(line));
+
+  const answers = {
+    1: numbered[1] ?? fallbackLines[0],
+    2: numbered[2] ?? fallbackLines[1],
+    3: numbered[3] ?? fallbackLines[2],
+    4: numbered[4] ?? fallbackLines[3],
+    5: numbered[5] ?? fallbackLines[4],
+  };
+
+  if (!answers[1] || !answers[2] || !answers[3] || !answers[4] || !answers[5]) {
+    return null;
+  }
+
+  const likes = splitCommaList(answers[1]);
+  const themes = splitCommaList(answers[2]);
+
+  return {
+    likes,
+    themes,
+    goal: resolveGoal(answers[3]),
+    languageLevel: resolveLevel(answers[4]),
+    targetLanguage: resolveTargetLanguage(answers[5]),
+  };
+}
+
+function buildOnboardingPrompt(): string {
+  return [
+    "Vou te fazer 5 perguntas rápidas. Responda em uma única mensagem usando a numeração abaixo:",
+    "1. O que você gosta? (ex: viagens, música, séries)",
+    "2. Quais temas você prefere estudar? (ex: trabalho, rotina, tecnologia)",
+    "3. Qual é seu objetivo com o idioma?",
+    "4. Qual seu nível atual?",
+    "5. Qual idioma você quer aprender? (inglês, espanhol ou francês)",
+  ].join("\n");
+}
+
+function buildGreetingMessage(name: string): string {
+  return [
+    `Olá, ${name}.`,
+    buildOnboardingPrompt(),
+  ].join("\n\n");
+}
+
+function buildReaskMessage(): string {
+  return [
+    "Não consegui entender suas respostas.",
+    buildOnboardingPrompt(),
+  ].join("\n\n");
 }
 
 export class MetaWhatsAppService {
@@ -28,14 +229,12 @@ export class MetaWhatsAppService {
     }
 
     for (const message of inboundMessages) {
-      const reply = this.buildAutoReply(message.text);
-
       try {
-        await this.sendWhatsAppMessage(message.from, reply);
+        await this.handleInboundMessage(message);
       } catch (error) {
         this.logger.error(
           { error, from: message.from },
-          "[meta-whatsapp] failed to send auto reply",
+          "[meta-whatsapp] failed to process inbound message",
         );
       }
     }
@@ -57,7 +256,7 @@ export class MetaWhatsAppService {
         body: JSON.stringify({
           messaging_product: "whatsapp",
           recipient_type: "individual",
-          to: this.normalizePhoneNumber(to),
+          to: normalizePhoneNumber(to),
           type: "text",
           text: {
             preview_url: false,
@@ -86,8 +285,150 @@ export class MetaWhatsAppService {
     }
   }
 
-  private buildAutoReply(text: string): string {
-    return `Recebi sua mensagem: ${text}`;
+  private async handleInboundMessage(message: InboundMessage): Promise<void> {
+    const phone = normalizePhoneNumber(message.from);
+    const text = message.text.trim();
+
+    const currentUser = await prisma.user.findUnique({
+      where: {
+        phone,
+      },
+      select: {
+        id: true,
+        name: true,
+        phone: true,
+        email: true,
+      },
+    });
+
+    const user =
+      currentUser ??
+      (await prisma.user.create({
+        data: {
+          name: `Usuário ${phone.slice(-4) || phone}`,
+          email: `wa-${phone}@example.com`,
+          phone,
+        },
+        select: {
+          id: true,
+          name: true,
+          phone: true,
+          email: true,
+        },
+      }));
+
+    const channel = await prisma.userChannel.upsert({
+      where: {
+        userId: user.id,
+      },
+      update: {},
+      create: {
+        userId: user.id,
+        status: UserChannelStatus.ONBOARDING,
+        onboardingStep: 1,
+      },
+      select: {
+        id: true,
+        userId: true,
+        status: true,
+        onboardingStep: true,
+      },
+    });
+
+    if (channel.status !== UserChannelStatus.ONBOARDING) {
+      if (channel.status === UserChannelStatus.OPT_IN) {
+        const result = await studyOrchestratorService.handleOptInConversation({
+          userId: user.id,
+          userName: user.name,
+          text,
+        });
+
+        if (result.kind !== "ignored") {
+          await this.sendWhatsAppMessage(user.phone, result.replyText);
+        }
+
+        return;
+      }
+
+      this.logger.info(`[meta-whatsapp] user not in onboarding phone=${phone} userId=${user.id}`);
+      return;
+    }
+
+    if (channel.onboardingStep === 1) {
+      await this.sendWhatsAppMessage(user.phone, buildGreetingMessage(user.name));
+
+      await prisma.userChannel.update({
+        where: {
+          userId: user.id,
+        },
+        data: {
+          onboardingStep: 2,
+        },
+      });
+
+      return;
+    }
+
+    const answers = parseOnboardingAnswers(text);
+
+    if (!answers) {
+      await this.sendWhatsAppMessage(user.phone, buildReaskMessage());
+      return;
+    }
+
+    await prisma.$transaction(async (tx) => {
+      const tenantId = await resolveDefaultTenantId();
+
+      await tx.kycUser.upsert({
+        where: {
+          userId: user.id,
+        },
+        update: {
+          personalPreferences: [...answers.likes, ...answers.themes],
+          language: answers.targetLanguage,
+          languageLevel: answers.languageLevel,
+          goal: answers.goal,
+        },
+        create: {
+          userId: user.id,
+          personalPreferences: [...answers.likes, ...answers.themes],
+          language: answers.targetLanguage,
+          languageLevel: answers.languageLevel,
+          goal: answers.goal,
+        },
+      });
+
+      await tx.learningProfile.upsert({
+        where: {
+          userId: user.id,
+        },
+        update: {
+          timezone: "America/Sao_Paulo",
+          nativeLanguage: "PT-BR",
+          targetLanguage: answers.targetLanguage,
+          goal: answers.goal,
+          interests: [...answers.likes, ...answers.themes],
+          ...(tenantId !== null ? { tenantId } : {}),
+        },
+        create: {
+          userId: user.id,
+          ...(tenantId !== null ? { tenantId } : {}),
+          timezone: "America/Sao_Paulo",
+          nativeLanguage: "PT-BR",
+          targetLanguage: answers.targetLanguage,
+          goal: answers.goal,
+          interests: [...answers.likes, ...answers.themes],
+        },
+      });
+    });
+
+    const studySession = await studyOrchestratorService.startDailyStudySession(user.id);
+
+    await this.sendWhatsAppMessage(user.phone, studySession.replyText);
+
+    this.logger.info(
+      `[meta-whatsapp] onboarding completed phone=${phone} userId=${user.id} packId=${studySession.packId ?? "n/a"}`,
+    );
   }
 
   private extractInboundMessages(payload: unknown): InboundMessage[] {
@@ -158,9 +499,5 @@ export class MetaWhatsAppService {
     }
 
     return undefined;
-  }
-
-  private normalizePhoneNumber(phone: string): string {
-    return phone.replace(/[^\d]/g, "");
   }
 }

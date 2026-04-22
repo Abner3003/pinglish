@@ -13,9 +13,9 @@ const kycUserRecordSchema = z.object({
   personalPreferences: z.array(z.string().min(1)),
   language: z.string().min(1),
   languageLevel: z.string().min(1),
-  city: z.string().min(1),
-  state: z.string().min(1),
-  age: z.number().int().positive(),
+  city: z.string().min(1).nullable(),
+  state: z.string().min(1).nullable(),
+  age: z.number().int().positive().nullable(),
 });
 
 const kycUserListResponseSchema = z.object({
@@ -56,9 +56,9 @@ function toKycUserRecord(kycUser: {
   personalPreferences: string[];
   language: string;
   languageLevel: string;
-  city: string;
-  state: string;
-  age: number;
+  city: string | null;
+  state: string | null;
+  age: number | null;
 }): KycUserRecord {
   return kycUser;
 }
