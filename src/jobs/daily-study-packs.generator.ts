@@ -1,5 +1,5 @@
 import { prisma } from "../lib/prisma.js";
-import { learningEngineService } from "../modules/learning-engine/learning-engine.module.js";
+import { studyOrchestratorService } from "../modules/study-orchestrator/study-orchestrator.module.js";
 
 async function main(): Promise<void> {
   const users = await prisma.user.findMany({
@@ -9,12 +9,10 @@ async function main(): Promise<void> {
   });
 
   for (const user of users) {
-    const result = await learningEngineService.generateDailyStudyPack({
-      userId: user.id,
-    });
+    const result = await studyOrchestratorService.getTodayPackForUser(user.id);
 
     console.log(
-      `[daily-study-packs] generated pack id=${result.pack.id} userId=${user.id}`,
+      `[daily-study-packs] ensured pack id=${result.packId} userId=${user.id}`,
     );
   }
 }

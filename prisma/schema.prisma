@@ -283,6 +283,8 @@ model DailyStudyPack {
   userId         String
   date           DateTime
   generatedAt    DateTime        @default(now())
+  nextReviewAt   DateTime?
+  reviewCount    Int             @default(0)
   items          Json
   targetXp       Int
   completed      Boolean         @default(false)

@@ -1,8 +1,10 @@
 import { Prisma, UserChannelStatus, type LearningItemType } from "../../generated/prisma/index.js";
 import { prisma } from "../../lib/prisma.js";
 import { learningEngineService } from "../learning-engine/learning-engine.module.js";
-import { learningResponseClassifier } from "../learning-response/learning-response.classifier.js";
-import { resolveDefaultTenantId } from "../tenants/default-tenant.service.js";
+import {
+  studyPackProviderService,
+  type AnalyzePackItemRequestPayload,
+} from "../study-pack-provider/study-pack-provider.module.js";
 
 type StudyPackStudy = {
   itemId: string;
@@ -41,6 +43,29 @@ type PackResult = {
   packId: string;
   studies: StudyPackStudy[];
   targetXp: number;
+};
+
+type CurrentStudyContext = {
+  userId: string;
+  channel: {
+    status: UserChannelStatus;
+    awaitingStudyReply: boolean;
+    currentPackId: string | null;
+    currentStudyItemId: string | null;
+    lastInboundAt: string | null;
+    lastOutboundAt: string | null;
+  } | null;
+  pack: {
+    id: string;
+    date: string;
+    generatedAt: string;
+    nextReviewAt: string | null;
+    reviewCount: number;
+    targetXp: number;
+    completed: boolean;
+  } | null;
+  currentStudyItem: StudyPackStudy | null;
+  analysisRequest: AnalyzePackItemRequestPayload | null;
 };
 
 type BotReplyInput = {
@@ -144,8 +169,47 @@ function buildBotReply(input: BotReplyInput): string {
   return `Beleza, ${input.userName}. Se quiser seguir estudando em ${languageHint}, eu continuo daqui.`;
 }
 
+function addHours(date: Date, hours: number): Date {
+  return new Date(date.getTime() + hours * 60 * 60 * 1000);
+}
+
+function scoreToQuality(score: number): 0 | 1 | 2 | 3 | 4 | 5 {
+  if (score >= 90) return 5;
+  if (score >= 75) return 4;
+  if (score >= 55) return 3;
+  if (score >= 35) return 2;
+  if (score >= 15) return 1;
+  return 0;
+}
+
 export class StudyOrchestratorService {
   async getTodayPackForUser(userId: string): Promise<PackResult> {
+    const today = new Date();
+    const startOfDay = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()));
+
+    const existingPack = await prisma.dailyStudyPack.findUnique({
+      where: {
+        userId_date: {
+          userId,
+          date: startOfDay,
+        },
+      },
+      select: {
+        id: true,
+        items: true,
+        targetXp: true,
+      },
+    });
+
+    if (existingPack) {
+      const packItems = normalizeStudies(existingPack.items);
+      return {
+        packId: existingPack.id,
+        studies: packItems,
+        targetXp: existingPack.targetXp,
+      };
+    }
+
     const result = await learningEngineService.generateDailyStudyPack({ userId });
     const packItems = normalizeStudies(result.pack.items);
     const studies = result.studies.length > 0 ? result.studies : packItems;
@@ -154,6 +218,77 @@ export class StudyOrchestratorService {
       packId: result.pack.id,
       studies,
       targetXp: result.pack.targetXp,
+    };
+  }
+
+  async getCurrentStudyContext(userId: string): Promise<CurrentStudyContext> {
+    const channel = await prisma.userChannel.findUnique({
+      where: { userId },
+      select: {
+        status: true,
+        awaitingStudyReply: true,
+        currentPackId: true,
+        currentStudyItemId: true,
+        lastInboundAt: true,
+        lastOutboundAt: true,
+      },
+    });
+
+    const pack = channel?.currentPackId
+      ? await prisma.dailyStudyPack.findUnique({
+          where: {
+            id: channel.currentPackId,
+          },
+          select: {
+            id: true,
+            date: true,
+            generatedAt: true,
+            nextReviewAt: true,
+            reviewCount: true,
+            targetXp: true,
+            completed: true,
+            items: true,
+          },
+        })
+      : null;
+
+    const studies = pack ? normalizeStudies(pack.items) : [];
+    const currentStudyItem = channel?.currentStudyItemId
+      ? studies.find((study) => study.itemId === channel.currentStudyItemId) ?? null
+      : null;
+
+    return {
+      userId,
+      channel: channel
+        ? {
+            status: channel.status,
+            awaitingStudyReply: channel.awaitingStudyReply,
+            currentPackId: channel.currentPackId,
+            currentStudyItemId: channel.currentStudyItemId,
+            lastInboundAt: channel.lastInboundAt?.toISOString() ?? null,
+            lastOutboundAt: channel.lastOutboundAt?.toISOString() ?? null,
+          }
+        : null,
+      pack: pack
+        ? {
+            id: pack.id,
+            date: pack.date.toISOString(),
+            generatedAt: pack.generatedAt.toISOString(),
+            nextReviewAt: pack.nextReviewAt?.toISOString() ?? null,
+            reviewCount: pack.reviewCount,
+            targetXp: pack.targetXp,
+            completed: pack.completed,
+          }
+        : null,
+      currentStudyItem,
+      analysisRequest: currentStudyItem && pack
+        ? {
+            userId,
+            packageId: pack.id,
+            packItemId: currentStudyItem.itemId,
+            userResponse: "",
+          }
+        : null,
     };
   }
 
@@ -176,6 +311,16 @@ export class StudyOrchestratorService {
 
     const pack = await this.getTodayPackForUser(userId);
     const firstItem = pack.studies[0] ?? null;
+
+    await prisma.dailyStudyPack.update({
+      where: {
+        id: pack.packId,
+      },
+      data: {
+        nextReviewAt: null,
+        completed: false,
+      },
+    });
 
     await prisma.userChannel.upsert({
       where: {
@@ -280,25 +425,29 @@ export class StudyOrchestratorService {
       };
     }
 
-    const classification = learningResponseClassifier.classify({
-      userText: input.text,
-      expectedText: currentItem.text,
-      itemType: currentItem.type ?? "EXAMPLE",
+    const analysisRequest = studyPackProviderService.buildAnalyzePackItemRequestPayload({
+      userId: input.userId,
+      packageId: pack.packId,
+      packItemId: currentItem.itemId,
+      userResponse: input.text,
     });
+
+    const analysis = await studyPackProviderService.analyzePackItemResponse(analysisRequest);
 
     await learningEngineService.recordStudyEvent({
       userId: input.userId,
       itemId: currentItem.itemId,
       packId: channel.currentPackId ?? pack.packId,
       eventType: "ANSWERED",
-      answerQuality: classification.answerQuality,
-      isCorrect: classification.answerQuality >= 3,
+      answerQuality: scoreToQuality(analysis?.data.score ?? 0),
+      isCorrect: (analysis?.data.status ?? "unclear") === "correct" || (analysis?.data.status ?? "unclear") === "partial",
+      xpEarned: analysis?.data.xp ?? 0,
     });
 
     const currentIndex = pack.studies.findIndex((study) => study.itemId === currentItem.itemId);
     const nextItem = pack.studies[currentIndex + 1] ?? null;
 
-    if (classification.answerQuality >= 3 && nextItem) {
+    if (nextItem) {
       await prisma.userChannel.update({
         where: { userId: input.userId },
         data: {
@@ -312,43 +461,61 @@ export class StudyOrchestratorService {
       return {
         kind: "study",
         replyText: [
-          `Boa. Vamos para o próximo:`,
+          analysis?.data.feedback || "Resposta registrada.",
+          "",
+          analysis?.data.nextStep || "Vamos para o próximo item.",
+          "",
+          `Próximo:`,
           "",
           `${currentIndex + 2}. ${nextItem.text} - ${nextItem.meaning}`,
         ].join("\n"),
-        answerQuality: classification.answerQuality,
-        confidence: classification.confidence,
-        reason: classification.reason,
+        answerQuality: scoreToQuality(analysis?.data.score ?? 0),
+        confidence: analysis?.data.score ? Math.min(1, Math.max(0.3, analysis.data.score / 100)) : 0.4,
+        reason: analysis?.data.source ?? "fallback",
         packId: pack.packId,
         itemId: nextItem.itemId,
         awaitingStudyReply: true,
       };
     }
 
-    const retryMessage =
-      classification.answerQuality >= 3
-        ? "Boa resposta. Seu bloco de estudo terminou por agora."
-        : "Quase. Vou manter esse item e você pode tentar de novo.";
+    const now = new Date();
+    const retryMessage = [
+      analysis?.data.feedback || "Resposta registrada.",
+      "",
+      "Seu pack terminou por agora.",
+      "Vou reagendar esse mesmo pack para daqui a 2 horas.",
+    ].join("\n");
 
     await prisma.userChannel.update({
       where: { userId: input.userId },
       data: {
-        awaitingStudyReply: classification.answerQuality < 3,
+        awaitingStudyReply: false,
         currentPackId: pack.packId,
-        currentStudyItemId: classification.answerQuality < 3 ? currentItem.itemId : null,
-        lastOutboundAt: new Date(),
+        currentStudyItemId: null,
+        lastOutboundAt: now,
+      },
+    });
+
+    await prisma.dailyStudyPack.update({
+      where: { id: pack.packId },
+      data: {
+        completed: true,
+        nextReviewAt: addHours(now, 2),
+        reviewCount: {
+          increment: 1,
+        },
       },
     });
 
     return {
       kind: "study",
       replyText: retryMessage,
-      answerQuality: classification.answerQuality,
-      confidence: classification.confidence,
-      reason: classification.reason,
+      answerQuality: scoreToQuality(analysis?.data.score ?? 0),
+      confidence: analysis?.data.score ? Math.min(1, Math.max(0.3, analysis.data.score / 100)) : 0.4,
+      reason: analysis?.data.source ?? "fallback",
       packId: pack.packId,
       itemId: currentItem.itemId,
-      awaitingStudyReply: classification.answerQuality < 3,
+      awaitingStudyReply: false,
     };
   }
 

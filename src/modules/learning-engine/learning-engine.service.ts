@@ -1,5 +1,6 @@
+/* eslint-disable no-useless-assignment */
 import { prisma } from "../../lib/prisma.js";
-import { LeagueRank, UserJourneyLevel, UserLearningStateStatus, type Prisma } from "../../generated/prisma/index.js";
+import {  UserJourneyLevel, UserLearningStateStatus, type Prisma } from "../../generated/prisma/index.js";
 import { studyPackProviderService } from "../study-pack-provider/study-pack-provider.module.js";
 import { resolveDefaultTenantId } from "../tenants/default-tenant.service.js";
 
@@ -194,7 +195,7 @@ function resolveStateUpdate(input: {
   let easeFactor = input.currentState.easeFactor;
   let masteryScore = input.currentState.masteryScore;
   let status = input.currentState.status;
-  let repetitionCount = input.currentState.repetitionCount + 1;
+  const repetitionCount = input.currentState.repetitionCount + 1;
   let consecutiveCorrect = input.currentState.consecutiveCorrect;
   let consecutiveWrong = input.currentState.consecutiveWrong;
   let lapses = input.currentState.lapses;
@@ -520,27 +521,30 @@ export class LearningEngineService {
       raw: fetchedPack.raw,
     } as Prisma.InputJsonValue;
 
-    const pack = await prisma.dailyStudyPack.upsert({
-      where: {
-        userId_date: {
+      const pack = await prisma.dailyStudyPack.upsert({
+        where: {
+          userId_date: {
+            userId: input.userId,
+            date,
+          },
+        },
+        create: {
           userId: input.userId,
           date,
+          generatedAt: new Date(),
+          nextReviewAt: null,
+          reviewCount: 0,
+          items: snapshot,
+          targetXp,
+          completed: false,
         },
-      },
-      create: {
-        userId: input.userId,
-        date,
-        generatedAt: new Date(),
-        items: snapshot,
-        targetXp,
-        completed: false,
-      },
-      update: {
-        generatedAt: new Date(),
-        items: snapshot,
-        targetXp,
-        completed: false,
-      },
+        update: {
+          generatedAt: new Date(),
+          nextReviewAt: null,
+          items: snapshot,
+          targetXp,
+          completed: false,
+        },
     });
 
     return {
@@ -683,8 +687,10 @@ export class LearningEngineService {
         }));
 
       const studies = [...dueItems, ...reinforcementCandidates, ...newCandidates];
-      const items = studies.map(({ itemId, source, order }) => ({
+      const items = studies.map(({ itemId, text, meaning, source, order }) => ({
         itemId,
+        text,
+        meaning,
         source,
         order,
       }));
@@ -702,12 +708,15 @@ export class LearningEngineService {
           userId: input.userId,
           date,
           generatedAt: new Date(),
+          nextReviewAt: null,
+          reviewCount: 0,
           items: items as Prisma.InputJsonValue,
           targetXp,
           completed: false,
         },
         update: {
           generatedAt: new Date(),
+          nextReviewAt: null,
           items: items as Prisma.InputJsonValue,
           targetXp,
           completed: false,

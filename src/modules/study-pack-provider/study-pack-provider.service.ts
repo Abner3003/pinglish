@@ -1,4 +1,7 @@
+/* eslint-disable @typescript-eslint/no-unused-vars */
 import { env } from "../../config/env.js";
+import { learningResponseClassifier } from "../learning-response/learning-response.classifier.js";
+import { prisma } from "../../lib/prisma.js";
 
 export type StudyPackLevel = "INICIANTE" | "PRE_INTERMEDIARIO" | "INTERMEDIARIO" | "AVANCADO" | "PROFICIENTE";
 
@@ -27,6 +30,37 @@ export type RemoteStudyPackResult = {
   studies: RemoteStudyItem[];
   raw: unknown;
 };
+
+export type PackItemAnalysisResult = {
+  ok: true;
+  mode: "item_analysis";
+  data: {
+    mode: "item_analysis";
+    userId: string;
+    packageId: string;
+    packItemId: string;
+    status: "correct" | "partial" | "incorrect" | "unclear";
+    score: number;
+    accuracyPercent: number;
+    proximity: "high" | "medium" | "low" | "very_low";
+    xp: number;
+    feedback: string;
+    expectedAnswer: string;
+    userResponse: string;
+    nextStep: string;
+    tips: string[];
+    source: "openai" | "fallback";
+  };
+};
+
+export type AnalyzePackItemInput = {
+  userId: string;
+  packageId: string;
+  packItemId: string;
+  userResponse: string;
+};
+
+export type AnalyzePackItemRequestPayload = AnalyzePackItemInput;
 
 type JsonRecord = Record<string, unknown>;
 
@@ -122,6 +156,150 @@ function extractTargetXp(payload: unknown): number | undefined {
   return undefined;
 }
 
+function extractAnalysisData(payload: unknown): PackItemAnalysisResult["data"] | null {
+  if (!isRecord(payload)) {
+    return null;
+  }
+
+  const data = isRecord(payload.data) ? payload.data : payload;
+  const status = getString(data.status);
+  const source = getString(data.source) === "openai" ? "openai" : "fallback";
+
+  if (!status) {
+    return null;
+  }
+
+  const score = getNumber(data.score) ?? 0;
+  const accuracyPercent = getNumber(data.accuracyPercent) ?? score;
+  const tips = Array.isArray(data.tips)
+    ? data.tips.filter((tip): tip is string => typeof tip === "string")
+    : [];
+
+  return {
+    mode: "item_analysis",
+    userId: getString(data.userId) ?? "",
+    packageId: getString(data.packageId) ?? "",
+    packItemId: getString(data.packItemId) ?? "",
+    status: status as PackItemAnalysisResult["data"]["status"],
+    score,
+    accuracyPercent,
+    proximity: (getString(data.proximity) ?? "low") as PackItemAnalysisResult["data"]["proximity"],
+    xp: getNumber(data.xp) ?? 0,
+    feedback: getString(data.feedback) ?? "",
+    expectedAnswer: getString(data.expectedAnswer) ?? "",
+    userResponse: getString(data.userResponse) ?? "",
+    nextStep: getString(data.nextStep) ?? "",
+    tips,
+    source,
+  };
+}
+
+function scoreToQuality(score: number): 0 | 1 | 2 | 3 | 4 | 5 {
+  if (score >= 90) return 5;
+  if (score >= 75) return 4;
+  if (score >= 55) return 3;
+  if (score >= 35) return 2;
+  if (score >= 15) return 1;
+  return 0;
+}
+
+async function buildFallbackAnalysis(input: AnalyzePackItemInput): Promise<PackItemAnalysisResult["data"]> {
+  const pack = await prisma.dailyStudyPack.findUnique({
+    where: {
+      id: input.packageId,
+    },
+    select: {
+      id: true,
+      items: true,
+    },
+  });
+
+  const studies = extractStudies(pack?.items);
+  const study = studies.find((entry) => entry.itemId === input.packItemId);
+
+  const item = await prisma.learningItem.findUnique({
+    where: {
+      id: input.packItemId,
+    },
+    select: {
+      id: true,
+      text: true,
+      meaning: true,
+      type: true,
+    },
+  });
+
+  const expectedAnswer = study?.text ?? item?.text ?? item?.meaning ?? "";
+  const classifierResult = learningResponseClassifier.classify({
+    userText: input.userResponse,
+    expectedText: expectedAnswer,
+    itemType: (item?.type as "LEXICAL_CHUNK" | "PATTERN" | "EXAMPLE" | "MICRO_LESSON" | undefined) ?? "EXAMPLE",
+  });
+
+  const score = Math.max(
+    0,
+    Math.min(
+      100,
+      classifierResult.answerQuality >= 4
+        ? 90
+        : classifierResult.answerQuality === 3
+          ? 70
+          : classifierResult.answerQuality === 2
+            ? 50
+            : classifierResult.answerQuality === 1
+              ? 25
+              : 5,
+    ),
+  );
+
+  const status =
+    classifierResult.answerQuality >= 4
+      ? "correct"
+      : classifierResult.answerQuality === 3
+        ? "partial"
+        : classifierResult.answerQuality === 2
+          ? "partial"
+          : classifierResult.answerQuality === 1
+            ? "incorrect"
+            : "unclear";
+
+  return {
+    mode: "item_analysis",
+    userId: input.userId,
+    packageId: input.packageId,
+    packItemId: input.packItemId,
+    status,
+    score,
+    accuracyPercent: score,
+    proximity:
+      score >= 85 ? "high" : score >= 60 ? "medium" : score >= 30 ? "low" : "very_low",
+    xp: classifierResult.answerQuality >= 4 ? 15 : classifierResult.answerQuality === 3 ? 9 : classifierResult.answerQuality === 2 ? 6 : classifierResult.answerQuality === 1 ? 3 : 0,
+    feedback:
+      classifierResult.answerQuality >= 4
+        ? "Boa resposta."
+        : classifierResult.answerQuality === 3
+          ? "Sua resposta tocou parte do conteúdo esperado."
+          : classifierResult.answerQuality === 2
+            ? "Você está perto. Revise o item e tente de novo."
+            : "Ainda precisa de revisão.",
+    expectedAnswer,
+    userResponse: input.userResponse,
+    nextStep:
+      classifierResult.answerQuality >= 4
+        ? "Passe para o próximo item do pack."
+        : "Revise o item e tente responder em uma frase curta usando o vocabulário do pack.",
+    tips:
+      classifierResult.answerQuality >= 4
+        ? ["Siga para o próximo item."]
+        : [
+            "Releia o título do item.",
+            "Tente responder com uma frase curta usando o vocabulário do pack.",
+            "Use um dos padrões dos exemplos.",
+          ],
+    source: "fallback",
+  };
+}
+
 function normalizeStudyItem(value: unknown, index: number): RemoteStudyItem[] {
   if (!isRecord(value)) {
     return [];
@@ -196,6 +374,17 @@ async function fetchJson(
 }
 
 export class StudyPackProviderService {
+  buildAnalyzePackItemRequestPayload(
+    input: AnalyzePackItemInput,
+  ): AnalyzePackItemRequestPayload {
+    return {
+      userId: input.userId,
+      packageId: input.packageId,
+      packItemId: input.packItemId,
+      userResponse: input.userResponse,
+    };
+  }
+
   async mountPack(input: RemoteStudyPackInput): Promise<RemoteStudyPackResult | null> {
     if (!env.STUDY_PACK_SERVICE_BASE_URL) {
       return null;
@@ -295,6 +484,49 @@ export class StudyPackProviderService {
     }
 
     return null;
+  }
+
+  async analyzePackItemResponse(input: AnalyzePackItemInput): Promise<PackItemAnalysisResult | null> {
+    if (!env.STUDY_PACK_SERVICE_BASE_URL) {
+      return {
+        ok: true,
+        mode: "item_analysis",
+        data: await buildFallbackAnalysis(input),
+      };
+    }
+
+    const url = buildUrl(
+      env.STUDY_PACK_SERVICE_BASE_URL,
+      env.STUDY_PACK_SERVICE_ANALYZE_PATH,
+    );
+    const payload = this.buildAnalyzePackItemRequestPayload(input);
+
+    const response = await fetchJson(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(env.STUDY_PACK_SERVICE_TOKEN
+          ? { Authorization: `Bearer ${env.STUDY_PACK_SERVICE_TOKEN}` }
+          : {}),
+      },
+      body: JSON.stringify(payload),
+    });
+
+    const analysisData = extractAnalysisData(response.body);
+
+    if (response.ok && analysisData) {
+      return {
+        ok: true,
+        mode: "item_analysis",
+        data: analysisData,
+      };
+    }
+
+    return {
+      ok: true,
+      mode: "item_analysis",
+      data: await buildFallbackAnalysis(input),
+    };
   }
 }
 

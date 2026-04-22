@@ -9,11 +9,13 @@
     "dev:worker": "tsx watch src/jobs/leads-events.consumer.ts",
     "dev:worker:interactions": "tsx watch src/jobs/interactions-events.consumer.ts",
     "dev:worker:daily-study-packs": "tsx watch src/jobs/daily-study-packs.generator.ts",
+    "dev:worker:study-pack-reviews": "tsx watch src/jobs/study-pack-reviews.dispatcher.ts",
     "build": "npm run prisma:generate && tsc -p tsconfig.json && mkdir -p dist/generated && cp -R src/generated/prisma dist/generated/prisma",
     "start": "node dist/server.js",
     "start:worker": "node dist/jobs/leads-events.consumer.js",
     "start:worker:interactions": "node dist/jobs/interactions-events.consumer.js",
     "start:worker:daily-study-packs": "node dist/jobs/daily-study-packs.generator.js",
+    "start:worker:study-pack-reviews": "node dist/jobs/study-pack-reviews.dispatcher.js",
     "prisma: migrate": "prisma migrate dev",
     "prisma:generate": "prisma generate",
     "lint": "eslint . --ext .ts,.js"

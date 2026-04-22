@@ -16,6 +16,8 @@ const packRecordSchema = z.object({
   userId: z.string().min(1),
   date: z.string().datetime(),
   generatedAt: z.string().datetime(),
+  nextReviewAt: z.string().datetime().nullable(),
+  reviewCount: z.number().int().nonnegative(),
   items: z.unknown(),
   targetXp: z.number().int().nonnegative(),
   completed: z.boolean(),
@@ -46,6 +48,49 @@ const packByUserResponseSchema = z.object({
   ),
 });
 
+const currentStudyContextResponseSchema = z.object({
+  userId: z.string().min(1),
+  channel: z
+    .object({
+      status: z.string(),
+      awaitingStudyReply: z.boolean(),
+      currentPackId: z.string().nullable(),
+      currentStudyItemId: z.string().nullable(),
+      lastInboundAt: z.string().datetime().nullable(),
+      lastOutboundAt: z.string().datetime().nullable(),
+    })
+    .nullable(),
+  pack: z
+    .object({
+      id: z.string().min(1),
+      date: z.string().datetime(),
+      generatedAt: z.string().datetime(),
+      nextReviewAt: z.string().datetime().nullable(),
+      reviewCount: z.number().int().nonnegative(),
+      targetXp: z.number().int().nonnegative(),
+      completed: z.boolean(),
+    })
+    .nullable(),
+  currentStudyItem: z
+    .object({
+      itemId: z.string().min(1),
+      text: z.string().min(1),
+      meaning: z.string().min(1),
+      source: z.string().optional(),
+      order: z.number().int().nonnegative().optional(),
+      type: z.string().optional(),
+    })
+    .nullable(),
+  analysisRequest: z
+    .object({
+      userId: z.string().min(1),
+      packageId: z.string().min(1),
+      packItemId: z.string().min(1),
+      userResponse: z.string(),
+    })
+    .nullable(),
+});
+
 const notFoundResponseSchema = z.object({
   message: z.string(),
 });
@@ -58,6 +103,8 @@ const bodySchema = z.object({
   userId: z.string().min(1),
   date: z.coerce.date(),
   generatedAt: z.coerce.date().optional(),
+  nextReviewAt: z.coerce.date().optional().nullable(),
+  reviewCount: z.number().int().nonnegative().optional(),
   items: z.unknown(),
   targetXp: z.number().int().nonnegative(),
   completed: z.boolean().default(false),
@@ -70,6 +117,8 @@ function toRecord(pack: {
   userId: string;
   date: Date;
   generatedAt: Date;
+  nextReviewAt: Date | null;
+  reviewCount: number;
   items: Prisma.JsonValue;
   targetXp: number;
   completed: boolean;
@@ -81,6 +130,8 @@ function toRecord(pack: {
     userId: pack.userId,
     date: pack.date.toISOString(),
     generatedAt: pack.generatedAt.toISOString(),
+    nextReviewAt: pack.nextReviewAt?.toISOString() ?? null,
+    reviewCount: pack.reviewCount,
     items: pack.items,
     targetXp: pack.targetXp,
     completed: pack.completed,
@@ -126,6 +177,8 @@ export const dailyStudyPackRoutes: FastifyPluginAsync = async (app) => {
         userId: true,
         date: true,
         generatedAt: true,
+        nextReviewAt: true,
+        reviewCount: true,
         items: true,
         targetXp: true,
         completed: true,
@@ -152,6 +205,8 @@ export const dailyStudyPackRoutes: FastifyPluginAsync = async (app) => {
         userId: true,
         date: true,
         generatedAt: true,
+        nextReviewAt: true,
+        reviewCount: true,
         items: true,
         targetXp: true,
         completed: true,
@@ -207,6 +262,25 @@ export const dailyStudyPackRoutes: FastifyPluginAsync = async (app) => {
     },
   );
 
+  typedApp.get(
+    "/by-user/:userId/current",
+    {
+      schema: {
+        tags: ["DailyStudyPacks"],
+        summary: "Get current study context for user",
+        params: z.object({
+          userId: z.string().min(1),
+        }),
+        response: { 200: currentStudyContextResponseSchema },
+      },
+    },
+    async (request) => {
+      const context = await studyOrchestratorService.getCurrentStudyContext(request.params.userId);
+
+      return context;
+    },
+  );
+
   typedApp.post("/", {
     schema: {
       tags: ["DailyStudyPacks"],
@@ -220,6 +294,8 @@ export const dailyStudyPackRoutes: FastifyPluginAsync = async (app) => {
         userId: request.body.userId,
         date: normalizeUtcDay(request.body.date),
         generatedAt: request.body.generatedAt ?? new Date(),
+        nextReviewAt: null,
+        reviewCount: 0,
         items: request.body.items as Prisma.InputJsonValue,
         targetXp: request.body.targetXp,
         completed: request.body.completed,
@@ -229,6 +305,8 @@ export const dailyStudyPackRoutes: FastifyPluginAsync = async (app) => {
         userId: true,
         date: true,
         generatedAt: true,
+        nextReviewAt: true,
+        reviewCount: true,
         items: true,
         targetXp: true,
         completed: true,
@@ -255,6 +333,8 @@ export const dailyStudyPackRoutes: FastifyPluginAsync = async (app) => {
         ...(request.body.userId !== undefined ? { userId: request.body.userId } : {}),
         ...(request.body.date !== undefined ? { date: normalizeUtcDay(request.body.date) } : {}),
         ...(request.body.generatedAt !== undefined ? { generatedAt: request.body.generatedAt } : {}),
+        ...(request.body.nextReviewAt !== undefined ? { nextReviewAt: request.body.nextReviewAt } : {}),
+        ...(request.body.reviewCount !== undefined ? { reviewCount: request.body.reviewCount } : {}),
         ...(request.body.items !== undefined ? { items: request.body.items as Prisma.InputJsonValue } : {}),
         ...(request.body.targetXp !== undefined ? { targetXp: request.body.targetXp } : {}),
         ...(request.body.completed !== undefined ? { completed: request.body.completed } : {}),
@@ -264,6 +344,8 @@ export const dailyStudyPackRoutes: FastifyPluginAsync = async (app) => {
         userId: true,
         date: true,
         generatedAt: true,
+        nextReviewAt: true,
+        reviewCount: true,
         items: true,
         targetXp: true,
         completed: true,

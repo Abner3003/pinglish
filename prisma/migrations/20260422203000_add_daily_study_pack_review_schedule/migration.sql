@@ -1,0 +1,2 @@
+ALTER TABLE "DailyStudyPack" ADD COLUMN "nextReviewAt" TIMESTAMP(3);
+ALTER TABLE "DailyStudyPack" ADD COLUMN "reviewCount" INTEGER NOT NULL DEFAULT 0;

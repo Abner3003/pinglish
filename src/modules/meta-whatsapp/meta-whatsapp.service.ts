@@ -60,7 +60,7 @@ function parseNumberedAnswers(text: string): Partial<Record<1 | 2 | 3 | 4 | 5, s
   const result: Partial<Record<1 | 2 | 3 | 4 | 5, string>> = {};
 
   for (const line of lines) {
-    const match = line.match(/^(\d+)[.)\-\:]\s*(.+)$/);
+    const match = line.match(/^(\d+)[.)\-:]\s*(.+)$/);
 
     if (!match) {
       continue;
@@ -167,7 +167,7 @@ function parseOnboardingAnswers(text: string): OnboardingAnswers | null {
     .split(/\n+/g)
     .map((line) => line.trim())
     .filter(Boolean)
-    .filter((line) => !/^(\d+)[.)\-\:]/.test(line));
+    .filter((line) => !/^(\d+)[.)\-:]/.test(line));
 
   const answers = {
     1: numbered[1] ?? fallbackLines[0],
