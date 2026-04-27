@@ -17,14 +17,6 @@ type InboundMessage = {
   text: string;
 };
 
-type OnboardingAnswers = {
-  likes: string[];
-  themes: string[];
-  goal: LearningGoal;
-  languageLevel: string;
-  targetLanguage: string;
-};
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -96,30 +88,8 @@ function splitCommaList(value: string): string[] {
     .filter(Boolean);
 }
 
-function parseNumberedAnswers(text: string): Partial<Record<1 | 2 | 3 | 4 | 5, string>> {
-  const lines = text
-    .split(/\n+/g)
-    .map((line) => line.trim())
-    .filter(Boolean);
-
-  const result: Partial<Record<1 | 2 | 3 | 4 | 5, string>> = {};
-
-  for (const line of lines) {
-    const match = line.match(/^(\d+)[.)\-:]\s*(.+)$/);
-
-    if (!match) {
-      continue;
-    }
-
-    const index = Number(match[1]);
-    const value = match[2].trim();
-
-    if (index >= 1 && index <= 5) {
-      result[index as 1 | 2 | 3 | 4 | 5] = value;
-    }
-  }
-
-  return result;
+function normalizeName(value: string): string {
+  return value.trim().replace(/\s+/g, " ");
 }
 
 function resolveGoal(value: string): LearningGoal {
@@ -206,65 +176,109 @@ function resolveTargetLanguage(value: string): string {
   return value.trim().toUpperCase();
 }
 
-function parseOnboardingAnswers(text: string): OnboardingAnswers | null {
-  const numbered = parseNumberedAnswers(text);
-  const fallbackLines = text
-    .split(/\n+/g)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .filter((line) => !/^(\d+)[.)\-:]/.test(line));
-
-  const answers = {
-    1: numbered[1] ?? fallbackLines[0],
-    2: numbered[2] ?? fallbackLines[1],
-    3: numbered[3] ?? fallbackLines[2],
-    4: numbered[4] ?? fallbackLines[3],
-    5: numbered[5] ?? fallbackLines[4],
-  };
-
-  if (!answers[1] || !answers[2] || !answers[3] || !answers[4] || !answers[5]) {
-    return null;
+function buildOnboardingQuestion(step: 2 | 3 | 4 | 5 | 6): string {
+  switch (step) {
+    case 2:
+      return "1. O que você gosta? (ex: viagens, música, séries)";
+    case 3:
+      return "2. Quais temas você prefere estudar? (ex: trabalho, rotina, tecnologia)";
+    case 4:
+      return "3. Qual é seu objetivo com o idioma?";
+    case 5:
+      return "4. Qual seu nível atual?";
+    case 6:
+      return "5. Qual idioma você quer aprender? (inglês, espanhol ou francês)";
   }
-
-  const likes = splitCommaList(answers[1]);
-  const themes = splitCommaList(answers[2]);
-
-  return {
-    likes,
-    themes,
-    goal: resolveGoal(answers[3]),
-    languageLevel: resolveLevel(answers[4]),
-    targetLanguage: resolveTargetLanguage(answers[5]),
-  };
 }
 
-function buildOnboardingPrompt(): string {
+function buildWelcomeMessage(): string {
   return [
-    "Vou te fazer 5 perguntas rápidas. Responda em uma única mensagem usando a numeração abaixo:",
-    "1. O que você gosta? (ex: viagens, música, séries)",
-    "2. Quais temas você prefere estudar? (ex: trabalho, rotina, tecnologia)",
-    "3. Qual é seu objetivo com o idioma?",
-    "4. Qual seu nível atual?",
-    "5. Qual idioma você quer aprender? (inglês, espanhol ou francês)",
+    "Olá! Seja bem-vindo ao Penglish 🎉",
+    "Qual é o seu nome?",
   ].join("\n");
 }
 
-function buildGreetingMessage(name: string): string {
+function buildReaskMessage(step: 1 | 2 | 3 | 4 | 5 | 6): string {
+  if (step === 1) {
+    return buildWelcomeMessage();
+  }
+
   return [
-    `Olá, ${name}.`,
-    buildOnboardingPrompt(),
+    "Não consegui entender sua resposta.",
+    buildOnboardingQuestion(step as 2 | 3 | 4 | 5 | 6),
   ].join("\n\n");
 }
 
-function buildReaskMessage(): string {
-  return [
-    "Não consegui entender suas respostas.",
-    buildOnboardingPrompt(),
-  ].join("\n\n");
+function dedupeStrings(values: string[]): string[] {
+  return [...new Set(values)];
+}
+
+function mergeStrings(current: string[], next: string[]): string[] {
+  return dedupeStrings([...current, ...next]);
 }
 
 export class MetaWhatsAppService {
   constructor(private readonly logger: Logger = console) {}
+
+  private async upsertPartialKycUser(input: {
+    userId: string;
+    personalPreferences?: string[];
+    language?: string;
+    languageLevel?: string;
+    goal?: LearningGoal | null;
+  }): Promise<{
+    personalPreferences: string[];
+    language: string;
+    languageLevel: string;
+    goal: LearningGoal | null;
+  }> {
+    const existing = await prisma.kycUser.findUnique({
+      where: {
+        userId: input.userId,
+      },
+      select: {
+        personalPreferences: true,
+        language: true,
+        languageLevel: true,
+        goal: true,
+      },
+    });
+
+    const personalPreferences = input.personalPreferences
+      ? mergeStrings(existing?.personalPreferences ?? [], input.personalPreferences)
+      : existing?.personalPreferences ?? [];
+
+    const language = input.language ?? existing?.language ?? "";
+    const languageLevel = input.languageLevel ?? existing?.languageLevel ?? "";
+    const goal = input.goal ?? existing?.goal ?? null;
+
+    const kycUser = await prisma.kycUser.upsert({
+      where: {
+        userId: input.userId,
+      },
+      update: {
+        personalPreferences,
+        language,
+        languageLevel,
+        goal,
+      },
+      create: {
+        userId: input.userId,
+        personalPreferences,
+        language,
+        languageLevel,
+        goal,
+      },
+      select: {
+        personalPreferences: true,
+        language: true,
+        languageLevel: true,
+        goal: true,
+      },
+    });
+
+    return kycUser;
+  }
 
   async getActiveIntegration(): Promise<WhatsAppIntegrationRecord | null> {
     return prisma.whatsAppIntegration.findFirst({
@@ -572,7 +586,23 @@ export class MetaWhatsAppService {
     }
 
     if (channel.onboardingStep === 1) {
-      await this.sendWhatsAppMessage(user.phone, buildGreetingMessage(user.name));
+      const name = normalizeName(text);
+
+      if (!name) {
+        await this.sendWhatsAppMessage(user.phone, buildReaskMessage(1));
+        return;
+      }
+
+      await prisma.user.update({
+        where: {
+          id: user.id,
+        },
+        data: {
+          name,
+        },
+      });
+
+      await this.sendWhatsAppMessage(user.phone, buildOnboardingQuestion(2));
 
       await prisma.userChannel.update({
         where: {
@@ -586,77 +616,157 @@ export class MetaWhatsAppService {
       return;
     }
 
-    const answers = parseOnboardingAnswers(text);
+    switch (channel.onboardingStep) {
+      case 2: {
+        const likes = splitCommaList(text);
 
-    if (!answers) {
-      await this.sendWhatsAppMessage(user.phone, buildReaskMessage());
-      return;
+        if (likes.length === 0) {
+          await this.sendWhatsAppMessage(user.phone, buildReaskMessage(2));
+          return;
+        }
+
+        await this.upsertPartialKycUser({
+          userId: user.id,
+          personalPreferences: likes,
+        });
+
+        await this.sendWhatsAppMessage(user.phone, buildOnboardingQuestion(3));
+
+        await prisma.userChannel.update({
+          where: {
+            userId: user.id,
+          },
+          data: {
+            onboardingStep: 3,
+          },
+        });
+
+        break;
+      }
+      case 3: {
+        const themes = splitCommaList(text);
+
+        if (themes.length === 0) {
+          await this.sendWhatsAppMessage(user.phone, buildReaskMessage(3));
+          return;
+        }
+
+        await this.upsertPartialKycUser({
+          userId: user.id,
+          personalPreferences: themes,
+        });
+
+        await this.sendWhatsAppMessage(user.phone, buildOnboardingQuestion(4));
+
+        await prisma.userChannel.update({
+          where: {
+            userId: user.id,
+          },
+          data: {
+            onboardingStep: 4,
+          },
+        });
+
+        break;
+      }
+      case 4: {
+        await this.upsertPartialKycUser({
+          userId: user.id,
+          goal: resolveGoal(text),
+        });
+
+        await this.sendWhatsAppMessage(user.phone, buildOnboardingQuestion(5));
+
+        await prisma.userChannel.update({
+          where: {
+            userId: user.id,
+          },
+          data: {
+            onboardingStep: 5,
+          },
+        });
+
+        break;
+      }
+      case 5: {
+        await this.upsertPartialKycUser({
+          userId: user.id,
+          languageLevel: resolveLevel(text),
+        });
+
+        await this.sendWhatsAppMessage(user.phone, buildOnboardingQuestion(6));
+
+        await prisma.userChannel.update({
+          where: {
+            userId: user.id,
+          },
+          data: {
+            onboardingStep: 6,
+          },
+        });
+
+        break;
+      }
+      case 6: {
+        const kycUser = await this.upsertPartialKycUser({
+          userId: user.id,
+          language: resolveTargetLanguage(text),
+        });
+
+        const tenantId = await resolveDefaultTenantId();
+
+        await prisma.learningProfile.upsert({
+          where: {
+            userId: user.id,
+          },
+          update: {
+            timezone: "America/Sao_Paulo",
+            nativeLanguage: "PT-BR",
+            targetLanguage: kycUser.language,
+            goal: kycUser.goal ?? LearningGoal.OTHER,
+            interests: kycUser.personalPreferences,
+            ...(tenantId !== null ? { tenantId } : {}),
+          },
+          create: {
+            userId: user.id,
+            ...(tenantId !== null ? { tenantId } : {}),
+            timezone: "America/Sao_Paulo",
+            nativeLanguage: "PT-BR",
+            targetLanguage: kycUser.language,
+            goal: kycUser.goal ?? LearningGoal.OTHER,
+            interests: kycUser.personalPreferences,
+          },
+        });
+
+        const studySession = await studyOrchestratorService.startDailyStudySession(user.id);
+
+        if (!studySession) {
+          this.logger.warn(
+            `[meta-whatsapp] study session unavailable phone=${phone} userId=${user.id}`,
+          );
+          return;
+        }
+
+        if (!studySession.replyText) {
+          return;
+        }
+
+        await this.sendWhatsAppMessage(user.phone, studySession.replyText);
+
+        this.logger.info(
+          `[meta-whatsapp] onboarding completed phone=${phone} userId=${user.id} packId=${studySession.packId ?? "n/a"}`,
+        );
+
+        return;
+      }
+      default: {
+        this.logger.warn(
+          `[meta-whatsapp] unexpected onboarding step=${channel.onboardingStep} phone=${phone} userId=${user.id}`,
+        );
+        return;
+      }
     }
 
-    await prisma.$transaction(async (tx) => {
-      const tenantId = await resolveDefaultTenantId();
-
-      await tx.kycUser.upsert({
-        where: {
-          userId: user.id,
-        },
-        update: {
-          personalPreferences: [...answers.likes, ...answers.themes],
-          language: answers.targetLanguage,
-          languageLevel: answers.languageLevel,
-          goal: answers.goal,
-        },
-        create: {
-          userId: user.id,
-          personalPreferences: [...answers.likes, ...answers.themes],
-          language: answers.targetLanguage,
-          languageLevel: answers.languageLevel,
-          goal: answers.goal,
-        },
-      });
-
-      await tx.learningProfile.upsert({
-        where: {
-          userId: user.id,
-        },
-        update: {
-          timezone: "America/Sao_Paulo",
-          nativeLanguage: "PT-BR",
-          targetLanguage: answers.targetLanguage,
-          goal: answers.goal,
-          interests: [...answers.likes, ...answers.themes],
-          ...(tenantId !== null ? { tenantId } : {}),
-        },
-        create: {
-          userId: user.id,
-          ...(tenantId !== null ? { tenantId } : {}),
-          timezone: "America/Sao_Paulo",
-          nativeLanguage: "PT-BR",
-          targetLanguage: answers.targetLanguage,
-          goal: answers.goal,
-          interests: [...answers.likes, ...answers.themes],
-        },
-      });
-    });
-
-    const studySession = await studyOrchestratorService.startDailyStudySession(user.id);
-
-    if (!studySession) {
-      this.logger.warn(
-        `[meta-whatsapp] study session unavailable phone=${phone} userId=${user.id}`,
-      );
-      return;
-    }
-
-    if (!studySession.replyText) {
-      return;
-    }
-
-    await this.sendWhatsAppMessage(user.phone, studySession.replyText);
-
-    this.logger.info(
-      `[meta-whatsapp] onboarding completed phone=${phone} userId=${user.id} packId=${studySession.packId ?? "n/a"}`,
-    );
   }
 
   private extractInboundMessages(payload: unknown): InboundMessage[] {

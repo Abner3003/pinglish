@@ -49,7 +49,7 @@ const userChannelRecordSchema = z.object({
   id: z.string().min(1),
   userId: z.string().min(1),
   status: z.enum(["OPT_IN", "OPT_OUT", "ONBOARDING", "OTHER"]),
-  onboardingStep: z.number().int().min(1).max(5),
+  onboardingStep: z.number().int().min(1).max(6),
 });
 
 const kycUserRecordSchema = z.object({

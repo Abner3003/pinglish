@@ -7,6 +7,7 @@ import {
 import {
   EventProcessingStatus,
   Prisma,
+  UserChannelStatus,
 } from "../generated/prisma/index.js";
 import { env } from "../config/env.js";
 import { prisma } from "../lib/prisma.js";
@@ -34,12 +35,28 @@ class UserCreatedHandler {
   ) {}
 
   async handle(event: UserCreatedEvent): Promise<void> {
+    const channel = await prisma.userChannel.findUnique({
+      where: {
+        userId: event.user.id,
+      },
+      select: {
+        status: true,
+        onboardingStep: true,
+      },
+    });
+
+    if (!channel || channel.status !== UserChannelStatus.ONBOARDING || channel.onboardingStep !== 1) {
+      this.logger.info(
+        `[users-worker] skipped welcome for user.created ${event.user.email} (${event.user.id})`,
+      );
+      return;
+    }
+
     await metaWhatsAppService.sendWhatsAppMessage(
       event.user.phone,
       [
-        `Olá, ${event.user.name}! Seja muito bem-vindo ao Penglish 🎉`,
-        "Vou te fazer 5 perguntas rápidas para eu te conhecer melhor.",
-        "Responda com SIM para continuar.",
+        "Olá! Seja bem-vindo ao Penglish 🎉",
+        "Qual é o seu nome?",
       ].join("\n\n"),
     );
 

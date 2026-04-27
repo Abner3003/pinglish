@@ -12,7 +12,7 @@ export const onboardingUserChannelPayloadSchema = z.object({
   id: z.string().min(1),
   userId: z.string().min(1),
   status: z.enum(["OPT_IN", "OPT_OUT", "ONBOARDING", "OTHER"]),
-  onboardingStep: z.number().int().min(1).max(5),
+  onboardingStep: z.number().int().min(1).max(6),
 });
 
 export const userCreatedEventSchema = z.object({
@@ -28,4 +28,3 @@ export type UserCreatedEvent = z.infer<typeof userCreatedEventSchema>;
 export function getUserCreatedEventId(userId: string): string {
   return `user.created:${userId}`;
 }
-
