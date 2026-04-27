@@ -10,12 +10,24 @@ export type RemoteStudyPackInput = {
   tenantId: string | null;
   level: StudyPackLevel;
   interests: string[];
+  mode: "teach" | "drill" | "remediate";
+  sessionId: string;
+  lessonGoal: string;
+  difficulty: string;
+  topic: string;
+  language: string;
+  context?: {
+    concept_seen?: boolean;
+    last_error?: string;
+    history_summary?: string;
+  };
 };
 
 export type RemoteStudyItem = {
   itemId: string;
   text: string;
   meaning: string;
+  topicKey?: string;
   source?: string;
   order?: number;
   type?: string;
@@ -31,36 +43,63 @@ export type RemoteStudyPackResult = {
   raw: unknown;
 };
 
-export type PackItemAnalysisResult = {
+export type ReviewResultPayload = {
   ok: true;
-  mode: "item_analysis";
+  mode: "review_result";
   data: {
-    mode: "item_analysis";
+    schema_version: "v1";
+    response_type: "review_result";
+    mode: "teach" | "drill" | "remediate";
     userId: string;
     packageId: string;
     packItemId: string;
-    status: "correct" | "partial" | "incorrect" | "unclear";
+    correct: boolean;
     score: number;
-    accuracyPercent: number;
-    proximity: "high" | "medium" | "low" | "very_low";
-    xp: number;
     feedback: string;
-    expectedAnswer: string;
-    userResponse: string;
-    nextStep: string;
-    tips: string[];
+    corrections: string[];
+    expected_answer: string;
+    alternative_answers: string[];
+    xp: number;
     source: "openai" | "fallback";
   };
 };
 
-export type AnalyzePackItemInput = {
+export type ReviewRequestInput = {
   userId: string;
   packageId: string;
   packItemId: string;
-  userResponse: string;
+  mode: "teach" | "drill" | "remediate";
+  sessionId: string;
+  lessonGoal: string;
+  difficulty: string;
+  topic: string;
+  language: string;
+  userAnswer: string;
+  context?: {
+    history_summary?: string;
+    last_error?: string;
+  };
 };
 
-export type AnalyzePackItemRequestPayload = AnalyzePackItemInput;
+export type ReviewRequestPayload = {
+  schema_version: "v1";
+  task_type: "review";
+  mode: "teach" | "drill" | "remediate";
+  user_id: string;
+  session_id: string;
+  lesson_goal: string;
+  difficulty: string;
+  topic: string;
+  language: string;
+  user_answer: string;
+  context?: {
+    history_summary?: string;
+    last_error?: string;
+  };
+  userId: string;
+  packageId: string;
+  packItemId: string;
+};
 
 type JsonRecord = Record<string, unknown>;
 
@@ -131,9 +170,13 @@ function extractPackId(payload: unknown): string | null {
     payload.packId,
     payload.id,
     payload.remotePackId,
+    payload.sessionId,
+    payload.session_id,
     isRecord(payload.data) ? payload.data.packId : undefined,
     isRecord(payload.data) ? payload.data.id : undefined,
     isRecord(payload.pack) ? payload.pack.id : undefined,
+    isRecord(payload.lesson) ? payload.lesson.sessionId : undefined,
+    isRecord(payload.lesson) ? payload.lesson.session_id : undefined,
   ];
 
   for (const candidate of candidates) {
@@ -160,6 +203,27 @@ function extractStudies(payload: unknown): RemoteStudyItem[] {
     payload.studies,
     payload.items,
     payload.content,
+    isRecord(payload.lesson) && typeof payload.lesson.message === "string"
+      ? [
+          {
+            itemId:
+              getString(payload.sessionId) ??
+              getString(payload.session_id) ??
+              getString(payload.topic) ??
+              getString(payload.topicKey) ??
+              "lesson",
+            text: payload.lesson.message,
+            meaning:
+              typeof payload.lesson.explanation === "string"
+                ? payload.lesson.explanation
+                : "",
+            topicKey: getString(payload.topic) ?? getString(payload.topicKey) ?? undefined,
+            source: "lesson_result",
+            order: 1,
+            metadata: isRecord(payload.lesson.metadata) ? payload.lesson.metadata : undefined,
+          },
+        ]
+      : undefined,
     isRecord(payload.data) ? payload.data.studies : undefined,
     isRecord(payload.data) ? payload.data.items : undefined,
     isRecord(payload.pack) ? payload.pack.studies : undefined,
@@ -183,6 +247,7 @@ function extractTargetXp(payload: unknown): number | undefined {
   const candidates = [
     payload.targetXp,
     payload.xp,
+    isRecord(payload.lesson) ? payload.lesson.xp : undefined,
     isRecord(payload.data) ? payload.data.targetXp : undefined,
     isRecord(payload.pack) ? payload.pack.targetXp : undefined,
   ];
@@ -198,40 +263,83 @@ function extractTargetXp(payload: unknown): number | undefined {
   return undefined;
 }
 
-function extractAnalysisData(payload: unknown): PackItemAnalysisResult["data"] | null {
+function extractTopicKey(value: unknown): string | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const candidates = [
+    value.topicKey,
+    value.topic,
+    value.concept,
+    value.subject,
+    isRecord(value.metadata) ? value.metadata.topicKey : undefined,
+    isRecord(value.metadata) ? value.metadata.topic : undefined,
+    isRecord(value.metadata) ? value.metadata.concept : undefined,
+  ];
+
+  for (const candidate of candidates) {
+    const topicKey = getString(candidate);
+
+    if (topicKey) {
+      return topicKey;
+    }
+  }
+
+  return undefined;
+}
+
+function extractAnalysisData(payload: unknown): ReviewResultPayload["data"] | null {
   if (!isRecord(payload)) {
     return null;
   }
 
-  const data = isRecord(payload.data) ? payload.data : payload;
-  const status = getString(data.status);
-  const source = getString(data.source) === "openai" ? "openai" : "fallback";
-
-  if (!status) {
-    return null;
-  }
-
-  const score = getNumber(data.score) ?? 0;
-  const accuracyPercent = getNumber(data.accuracyPercent) ?? score;
-  const tips = Array.isArray(data.tips)
-    ? data.tips.filter((tip): tip is string => typeof tip === "string")
-    : [];
+  const data = isRecord(payload.review)
+    ? payload.review
+    : isRecord(payload.data) && isRecord(payload.data.review)
+      ? payload.data.review
+      : isRecord(payload.data)
+        ? payload.data
+        : payload;
+  const scoreValue =
+    getNumber(data.score) ??
+    getNumber(payload.score) ??
+    (data.correct === true ? 1 : 0);
+  const normalizedScore = scoreValue <= 1 ? Math.round(scoreValue * 100) : Math.round(scoreValue);
+  const correct =
+    data.correct === true || normalizedScore >= 80;
+  const source = getString(data.source) === "openai" || getString(payload.source) === "openai" ? "openai" : "fallback";
+  const accuracyPercent = getNumber(data.accuracyPercent) ?? normalizedScore;
+  const corrections = Array.isArray(data.corrections)
+    ? data.corrections.filter((tip): tip is string => typeof tip === "string")
+    : Array.isArray(data.tips)
+      ? data.tips.filter((tip): tip is string => typeof tip === "string")
+      : [];
+  const expectedAnswer =
+    getString(data.expectedAnswer) ??
+    getString(data.expected_answer) ??
+    (Array.isArray(data.alternative_answers) && data.alternative_answers.length > 0
+      ? data.alternative_answers[0]
+      : "");
 
   return {
-    mode: "item_analysis",
-    userId: getString(data.userId) ?? "",
-    packageId: getString(data.packageId) ?? "",
-    packItemId: getString(data.packItemId) ?? "",
-    status: status as PackItemAnalysisResult["data"]["status"],
-    score,
-    accuracyPercent,
-    proximity: (getString(data.proximity) ?? "low") as PackItemAnalysisResult["data"]["proximity"],
-    xp: getNumber(data.xp) ?? 0,
-    feedback: getString(data.feedback) ?? "",
-    expectedAnswer: getString(data.expectedAnswer) ?? "",
-    userResponse: getString(data.userResponse) ?? "",
-    nextStep: getString(data.nextStep) ?? "",
-    tips,
+    schema_version: "v1",
+    response_type: "review_result",
+    mode: (getString(data.mode) as ReviewResultPayload["data"]["mode"]) ?? "drill",
+    userId: getString(data.userId) ?? getString(payload.user_id) ?? "",
+    packageId: getString(data.packageId) ?? getString(payload.session_id) ?? getString(payload.sessionId) ?? "",
+    packItemId: getString(data.packItemId) ?? getString(payload.packItemId) ?? getString(payload.topic) ?? "",
+    correct,
+    score: normalizedScore,
+    feedback: getString(data.feedback) ?? getString(data.feedback_message) ?? "",
+    corrections,
+    expected_answer: expectedAnswer,
+    alternative_answers: Array.isArray(data.alternative_answers)
+      ? data.alternative_answers.filter((answer): answer is string => typeof answer === "string")
+      : expectedAnswer
+        ? [expectedAnswer]
+        : [],
+    xp: getNumber(data.xp) ?? getNumber(payload.xp) ?? 0,
     source,
   };
 }
@@ -245,7 +353,7 @@ function scoreToQuality(score: number): 0 | 1 | 2 | 3 | 4 | 5 {
   return 0;
 }
 
-async function buildFallbackAnalysis(input: AnalyzePackItemInput): Promise<PackItemAnalysisResult["data"]> {
+async function buildFallbackAnalysis(input: ReviewRequestPayload): Promise<ReviewResultPayload["data"]> {
   const pack = await prisma.dailyStudyPack.findUnique({
     where: {
       id: input.packageId,
@@ -273,7 +381,7 @@ async function buildFallbackAnalysis(input: AnalyzePackItemInput): Promise<PackI
 
   const expectedAnswer = study?.text ?? item?.text ?? item?.meaning ?? "";
   const classifierResult = learningResponseClassifier.classify({
-    userText: input.userResponse,
+    userText: input.user_answer,
     expectedText: expectedAnswer,
     itemType: (item?.type as "LEXICAL_CHUNK" | "PATTERN" | "EXAMPLE" | "MICRO_LESSON" | undefined) ?? "EXAMPLE",
   });
@@ -306,15 +414,14 @@ async function buildFallbackAnalysis(input: AnalyzePackItemInput): Promise<PackI
             : "unclear";
 
   return {
-    mode: "item_analysis",
+    schema_version: "v1",
+    response_type: "review_result",
+    mode: input.mode,
     userId: input.userId,
     packageId: input.packageId,
     packItemId: input.packItemId,
-    status,
+    correct: classifierResult.answerQuality >= 4,
     score,
-    accuracyPercent: score,
-    proximity:
-      score >= 85 ? "high" : score >= 60 ? "medium" : score >= 30 ? "low" : "very_low",
     xp: classifierResult.answerQuality >= 4 ? 15 : classifierResult.answerQuality === 3 ? 9 : classifierResult.answerQuality === 2 ? 6 : classifierResult.answerQuality === 1 ? 3 : 0,
     feedback:
       classifierResult.answerQuality >= 4
@@ -324,20 +431,16 @@ async function buildFallbackAnalysis(input: AnalyzePackItemInput): Promise<PackI
           : classifierResult.answerQuality === 2
             ? "Você está perto. Revise o item e tente de novo."
             : "Ainda precisa de revisão.",
-    expectedAnswer,
-    userResponse: input.userResponse,
-    nextStep:
+    corrections:
       classifierResult.answerQuality >= 4
-        ? "Passe para o próximo item do pack."
-        : "Revise o item e tente responder em uma frase curta usando o vocabulário do pack.",
-    tips:
-      classifierResult.answerQuality >= 4
-        ? ["Siga para o próximo item."]
+        ? []
         : [
             "Releia o título do item.",
             "Tente responder com uma frase curta usando o vocabulário do pack.",
             "Use um dos padrões dos exemplos.",
           ],
+    expected_answer: expectedAnswer,
+    alternative_answers: expectedAnswer ? [expectedAnswer] : [],
     source: "fallback",
   };
 }
@@ -372,6 +475,7 @@ function normalizeStudyItem(value: unknown, index: number): RemoteStudyItem[] {
   const order = getNumber(value.order) ?? getNumber(value.position) ?? index + 1;
   const type = getString(value.type);
   const difficulty = getNumber(value.difficulty);
+  const topicKey = extractTopicKey(value);
   const tags = Array.isArray(value.tags)
     ? value.tags.filter((tag): tag is string => typeof tag === "string")
     : undefined;
@@ -379,8 +483,9 @@ function normalizeStudyItem(value: unknown, index: number): RemoteStudyItem[] {
   return [
     {
       itemId,
-      text,
+      text: text,
       meaning,
+      topicKey,
       source,
       order,
       type,
@@ -420,14 +525,39 @@ function shouldRetryStatus(status: number): boolean {
 }
 
 export class StudyPackProviderService {
+  buildLessonGenerationPayload(input: RemoteStudyPackInput): Record<string, unknown> {
+    return {
+      schema_version: "v1",
+      task_type: "lesson",
+      mode: input.mode ?? "teach",
+      user_id: input.userId,
+      session_id: input.sessionId,
+      lesson_goal: input.lessonGoal,
+      difficulty: input.difficulty,
+      topic: input.topic,
+      language: input.language,
+      context: input.context ?? undefined,
+    };
+  }
+
   buildAnalyzePackItemRequestPayload(
     input: AnalyzePackItemInput,
   ): AnalyzePackItemRequestPayload {
     return {
+      schema_version: "v1",
+      task_type: "review",
+      user_id: input.userId,
+      session_id: input.sessionId,
+      lesson_goal: input.lessonGoal,
+      difficulty: input.difficulty,
+      topic: input.topic,
+      language: input.language,
+      user_answer: input.userAnswer,
+      context: input.context,
       userId: input.userId,
       packageId: input.packageId,
       packItemId: input.packItemId,
-      userResponse: input.userResponse,
+      mode: input.mode,
     };
   }
 
@@ -450,6 +580,7 @@ export class StudyPackProviderService {
         }
 
         const url = buildUrl(env.STUDY_PACK_SERVICE_BASE_URL, path);
+        const payload = this.buildLessonGenerationPayload(input);
 
         const response = await retryRemoteCall(async () => {
           const result = await fetchJson(url, {
@@ -460,7 +591,7 @@ export class StudyPackProviderService {
                 ? { Authorization: `Bearer ${env.STUDY_PACK_SERVICE_TOKEN}` }
                 : {}),
             },
-            body: JSON.stringify(input),
+            body: JSON.stringify(payload),
           });
 
           if (!result.ok && shouldRetryStatus(result.status)) {
@@ -576,7 +707,7 @@ export class StudyPackProviderService {
     return null;
   }
 
-  async analyzePackItemResponse(input: AnalyzePackItemInput): Promise<PackItemAnalysisResult | null> {
+  async analyzePackItemResponse(input: AnalyzePackItemRequestPayload): Promise<PackItemAnalysisResult | null> {
     if (!env.STUDY_PACK_SERVICE_BASE_URL) {
       return null;
     }
@@ -586,7 +717,7 @@ export class StudyPackProviderService {
         env.STUDY_PACK_SERVICE_BASE_URL,
         env.STUDY_PACK_SERVICE_ANALYZE_PATH,
       );
-      const payload = this.buildAnalyzePackItemRequestPayload(input);
+      const payload = input;
 
       const response = await retryRemoteCall(async () => {
         const result = await fetchJson(url, {

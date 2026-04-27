@@ -1,7 +1,7 @@
 import { prisma } from "../lib/prisma.js";
 import { studyOrchestratorService } from "../modules/study-orchestrator/study-orchestrator.module.js";
 
-async function main(): Promise<void> {
+export async function runDailyStudyPacksGenerator(): Promise<void> {
   const users = await prisma.user.findMany({
     select: {
       id: true,
@@ -20,6 +20,10 @@ async function main(): Promise<void> {
       `[daily-study-packs] ensured pack id=${result.packId} userId=${user.id}`,
     );
   }
+}
+
+async function main(): Promise<void> {
+  await runDailyStudyPacksGenerator();
 }
 
 main().catch((error) => {

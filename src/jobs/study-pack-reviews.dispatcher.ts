@@ -3,7 +3,7 @@ import { metaWhatsAppService } from "../modules/meta-whatsapp/meta-whatsapp.modu
 import { studyOrchestratorService } from "../modules/study-orchestrator/study-orchestrator.module.js";
 import { UserChannelStatus } from "../generated/prisma/index.js";
 
-async function main(): Promise<void> {
+export async function runStudyPackReviewsDispatcher(): Promise<void> {
   const now = new Date();
 
   const duePacks = await prisma.dailyStudyPack.findMany({
@@ -59,6 +59,10 @@ async function main(): Promise<void> {
       `[study-pack-reviews] dispatched packId=${pack.id} userId=${user.id}`,
     );
   }
+}
+
+async function main(): Promise<void> {
+  await runStudyPackReviewsDispatcher();
 }
 
 main().catch((error) => {

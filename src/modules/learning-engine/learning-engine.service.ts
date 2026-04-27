@@ -1,4 +1,5 @@
 /* eslint-disable no-useless-assignment */
+import { randomUUID } from "node:crypto";
 import { prisma } from "../../lib/prisma.js";
 import {  UserJourneyLevel, UserLearningStateStatus, type Prisma } from "../../generated/prisma/index.js";
 import { studyPackProviderService } from "../study-pack-provider/study-pack-provider.module.js";
@@ -37,6 +38,7 @@ type StudyPackStudy = {
   itemId: string;
   text: string;
   meaning: string;
+  topicKey?: string;
   source: "due_review" | "reinforcement" | "new_content" | "remote";
   order: number;
 };
@@ -61,6 +63,18 @@ type LearningProfileRecord = {
   targetLanguage: string;
   goal: "TRAVEL" | "WORK" | "CONVERSATION" | "SCHOOL" | "OTHER";
   interests: string[];
+};
+
+type LessonMode = "teach" | "drill" | "remediate";
+type LessonResult = "correct" | "partial" | "incorrect" | "unclear";
+type ConceptStateRecord = {
+  userId: string;
+  topicKey: string;
+  conceptSeenAt: Date | null;
+  lastMode: string | null;
+  lastResult: string | null;
+  lastAnswerQuality: number | null;
+  lastReviewedAt: Date | null;
 };
 
 const rankOrder = ["D", "C", "B", "A", "S", "SS"] as const;
@@ -88,6 +102,91 @@ function addDays(date: Date, days: number): Date {
 
 function dayKey(date: Date): string {
   return startOfUtcDay(date).toISOString().slice(0, 10);
+}
+
+function normalizeTopicKey(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const normalized = value.trim().toLowerCase().replace(/\s+/g, "_");
+  return normalized.length > 0 ? normalized : null;
+}
+
+function extractTopicKeyFromMetadata(metadata: Prisma.JsonValue | null | undefined): string | null {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+    return null;
+  }
+
+  const record = metadata as Record<string, unknown>;
+  const candidates = [
+    record.topicKey,
+    record.topic,
+    record.concept,
+    record.subject,
+    record.lessonTopic,
+  ];
+
+  for (const candidate of candidates) {
+    const topicKey = normalizeTopicKey(candidate);
+
+    if (topicKey) {
+      return topicKey;
+    }
+  }
+
+  return null;
+}
+
+function resolveLessonMode(state: ConceptStateRecord | null): LessonMode {
+  if (!state || !state.conceptSeenAt) {
+    return "teach";
+  }
+
+  const lastResult = state.lastResult;
+  const lastAnswerQuality = state.lastAnswerQuality ?? null;
+
+  if (lastResult === "correct" || (lastAnswerQuality !== null && lastAnswerQuality >= 4)) {
+    return "drill";
+  }
+
+  return "remediate";
+}
+
+function resolveLessonResult(quality: AnswerQuality | undefined): LessonResult {
+  if (quality === undefined) {
+    return "unclear";
+  }
+
+  if (quality >= 4) {
+    return "correct";
+  }
+
+  if (quality === 3) {
+    return "partial";
+  }
+
+  if (quality >= 1) {
+    return "incorrect";
+  }
+
+  return "unclear";
+}
+
+function resolveDifficultyLabel(difficulty: number | null | undefined): string {
+  if (difficulty === undefined || difficulty === null) {
+    return "easy";
+  }
+
+  if (difficulty <= 2) {
+    return "easy";
+  }
+
+  if (difficulty <= 4) {
+    return "medium";
+  }
+
+  return "hard";
 }
 
 function normalizeAnswerQuality(input: {
@@ -452,6 +551,52 @@ export class LearningEngineService {
         });
       }
 
+      const learningItem = await tx.learningItem.findUnique({
+        where: {
+          id: input.itemId,
+        },
+        select: {
+          id: true,
+          metadata: true,
+        },
+      });
+
+      const topicKey = extractTopicKeyFromMetadata(learningItem?.metadata) ?? normalizeTopicKey(input.itemId) ?? input.itemId;
+      const existingConceptState = await tx.userConceptState.findUnique({
+        where: {
+          userId_topicKey: {
+            userId: input.userId,
+            topicKey,
+          },
+        },
+      });
+      const conceptResult = resolveLessonResult(quality);
+
+      await tx.userConceptState.upsert({
+        where: {
+          userId_topicKey: {
+            userId: input.userId,
+            topicKey,
+          },
+        },
+        create: {
+          userId: input.userId,
+          topicKey,
+          conceptSeenAt: occurredAt,
+          lastMode: existingConceptState?.lastMode ?? null,
+          lastResult: conceptResult,
+          lastAnswerQuality: quality ?? null,
+          lastReviewedAt: occurredAt,
+        },
+        update: {
+          conceptSeenAt: existingConceptState?.conceptSeenAt ?? occurredAt,
+          lastMode: existingConceptState?.lastMode ?? null,
+          lastResult: conceptResult,
+          lastAnswerQuality: quality ?? null,
+          lastReviewedAt: occurredAt,
+        },
+      });
+
       await this.recalculateProgression(tx, input.userId, occurredAt);
 
       return createdEvent;
@@ -462,6 +607,154 @@ export class LearningEngineService {
 
   async generateDailyStudyPack(input: GeneratePackInput) {
     return this.generateRemoteDailyStudyPack(input);
+  }
+
+  private async resolvePrimaryLessonContext(input: GeneratePackInput): Promise<{
+    topicKey: string;
+    mode: LessonMode;
+    sessionId: string;
+    difficulty: string;
+  lessonGoal: string;
+  language: string;
+  conceptState: ConceptStateRecord | null;
+  historySummary: string;
+} | null> {
+    const profile = await prisma.learningProfile.findUnique({
+      where: { userId: input.userId },
+    });
+
+    const journey = await prisma.userJourney.findUnique({
+      where: { userId: input.userId },
+    });
+
+    const level = journey?.level ?? UserJourneyLevel.INICIANTE;
+    const tenantId =
+      input.tenantId ?? profile?.tenantId ?? (await resolveDefaultTenantId());
+    const now = new Date();
+
+    const dueStates = await prisma.userLearningState.findMany({
+      where: {
+        userId: input.userId,
+        nextReviewAt: {
+          lte: now,
+        },
+        ...(tenantId
+          ? {
+              item: {
+                tenantId,
+              },
+            }
+          : {}),
+      },
+      include: {
+        item: {
+          select: {
+            id: true,
+            difficulty: true,
+            metadata: true,
+          },
+        },
+      },
+      orderBy: {
+        nextReviewAt: "asc",
+      },
+    });
+
+    const allItems = await prisma.learningItem.findMany({
+      where: {
+        ...(tenantId ? { tenantId } : {}),
+      },
+      orderBy: [{ difficulty: "asc" }, { createdAt: "asc" }],
+      select: {
+        id: true,
+        difficulty: true,
+        metadata: true,
+        prerequisiteItemIds: true,
+        relatedItemIds: true,
+        type: true,
+      },
+    });
+
+    const stateByItemId = new Map(
+      (
+        await prisma.userLearningState.findMany({
+          where: {
+            userId: input.userId,
+          },
+          select: {
+            itemId: true,
+            status: true,
+            masteryScore: true,
+          },
+        })
+      ).map((state) => [state.itemId, state]),
+    );
+
+    const dueCandidate = dueStates[0]?.item ?? null;
+    const reinforcementCandidate = allItems.find((item) => {
+      const state = stateByItemId.get(item.id);
+      return (
+        state &&
+        (state.status === UserLearningStateStatus.LEARNING ||
+          (state.status === UserLearningStateStatus.REVIEW && state.masteryScore < 80))
+      );
+    });
+    const newCandidate = allItems.find(
+      (item) =>
+        !stateByItemId.has(item.id) &&
+        this.isNewContentEligible(
+          {
+            difficulty: item.difficulty,
+            type: item.type,
+            prerequisiteItemIds: item.prerequisiteItemIds,
+            relatedItemIds: item.relatedItemIds,
+          },
+          level,
+        ),
+    );
+    const selectedItem = dueCandidate ?? reinforcementCandidate ?? newCandidate ?? allItems[0] ?? null;
+
+    if (!selectedItem) {
+      return null;
+    }
+
+    const topicKey =
+      extractTopicKeyFromMetadata(selectedItem.metadata) ??
+      normalizeTopicKey(selectedItem.id) ??
+      selectedItem.id;
+    const conceptState = await prisma.userConceptState.findUnique({
+      where: {
+        userId_topicKey: {
+          userId: input.userId,
+          topicKey,
+        },
+      },
+    });
+
+    return {
+      topicKey,
+      mode: resolveLessonMode(conceptState),
+      sessionId: randomUUID(),
+      difficulty: resolveDifficultyLabel(selectedItem.difficulty),
+      lessonGoal: "translation",
+      language: profile?.nativeLanguage ?? "pt-BR",
+      historySummary: conceptState?.conceptSeenAt
+        ? conceptState.lastResult === "correct"
+          ? "usuário já viu o conceito e respondeu corretamente antes"
+          : "usuário já viu o conceito, mas ainda precisa de reforço"
+        : "usuário está começando o tópico",
+      conceptState: conceptState
+        ? {
+            userId: conceptState.userId,
+            topicKey: conceptState.topicKey,
+            conceptSeenAt: conceptState.conceptSeenAt,
+            lastMode: conceptState.lastMode,
+            lastResult: conceptState.lastResult,
+            lastAnswerQuality: conceptState.lastAnswerQuality,
+            lastReviewedAt: conceptState.lastReviewedAt,
+          }
+        : null,
+    };
   }
 
   private async generateRemoteDailyStudyPack(input: GeneratePackInput) {
@@ -487,12 +780,59 @@ export class LearningEngineService {
     const level = journey?.level ?? UserJourneyLevel.INICIANTE;
     const tenantId =
       input.tenantId ?? profile?.tenantId ?? (await resolveDefaultTenantId());
+    const lessonContext = await this.resolvePrimaryLessonContext(input);
+
+    if (!lessonContext) {
+      return null;
+    }
+
+    await prisma.userConceptState.upsert({
+      where: {
+        userId_topicKey: {
+          userId: input.userId,
+          topicKey: lessonContext.topicKey,
+        },
+      },
+      create: {
+        userId: input.userId,
+        topicKey: lessonContext.topicKey,
+        conceptSeenAt: new Date(),
+        lastMode: lessonContext.mode,
+        lastResult: null,
+        lastAnswerQuality: null,
+        lastReviewedAt: null,
+      },
+      update: {
+        conceptSeenAt: lessonContext.conceptState?.conceptSeenAt ?? new Date(),
+        lastMode: lessonContext.mode,
+      },
+    });
 
     const mountResult = await studyPackProviderService.mountPack({
       userId: input.userId,
       tenantId,
       level,
       interests: learningProfile?.interests ?? [],
+      mode: lessonContext.mode,
+      sessionId: lessonContext.sessionId,
+      lessonGoal: lessonContext.lessonGoal,
+      difficulty: lessonContext.difficulty,
+      topic: lessonContext.topicKey,
+      language: lessonContext.language,
+      context:
+        lessonContext.mode === "remediate" && lessonContext.conceptState?.lastResult
+          ? {
+              concept_seen: true,
+              last_error:
+                lessonContext.conceptState.lastResult === "incorrect"
+                  ? "o aluno errou ao tentar aplicar o conceito"
+                  : "o aluno precisa de correção focada no erro anterior",
+              history_summary: lessonContext.historySummary,
+            }
+          : {
+              concept_seen: Boolean(lessonContext.conceptState?.conceptSeenAt),
+              history_summary: lessonContext.historySummary,
+            },
     });
 
     if (!mountResult) {
@@ -508,6 +848,9 @@ export class LearningEngineService {
       userId: input.userId,
       tenantId,
       level,
+      mode: lessonContext.mode,
+      topicKey: lessonContext.topicKey,
+      sessionId: lessonContext.sessionId,
       interests: learningProfile?.interests ?? [],
       studies,
       targetXp,
@@ -640,6 +983,10 @@ export class LearningEngineService {
         itemId: state.itemId,
         text: state.item.text,
         meaning: state.item.meaning,
+        topicKey:
+          extractTopicKeyFromMetadata(state.item.metadata) ??
+          normalizeTopicKey(state.itemId) ??
+          state.itemId,
         source: "due_review" as const,
         order: index + 1,
       }));
@@ -665,6 +1012,10 @@ export class LearningEngineService {
           itemId: item.id,
           text: item.text,
           meaning: item.meaning,
+          topicKey:
+            extractTopicKeyFromMetadata(item.metadata) ??
+            normalizeTopicKey(item.id) ??
+            item.id,
           source: "reinforcement" as const,
           order: dueItems.length + index + 1,
         }));
@@ -676,15 +1027,20 @@ export class LearningEngineService {
           itemId: item.id,
           text: item.text,
           meaning: item.meaning,
+          topicKey:
+            extractTopicKeyFromMetadata(item.metadata) ??
+            normalizeTopicKey(item.id) ??
+            item.id,
           source: "new_content" as const,
           order: dueItems.length + reinforcementCandidates.length + index + 1,
         }));
 
       const studies = [...dueItems, ...reinforcementCandidates, ...newCandidates];
-      const items = studies.map(({ itemId, text, meaning, source, order }) => ({
+      const items = studies.map(({ itemId, text, meaning, topicKey, source, order }) => ({
         itemId,
         text,
         meaning,
+        topicKey,
         source,
         order,
       }));
@@ -904,6 +1260,10 @@ export class LearningEngineService {
     kind?: string;
     order?: number;
     position?: number;
+    topicKey?: string;
+    topic?: string;
+    concept?: string;
+    metadata?: unknown;
   }>): StudyPackStudy[] {
     return studies.flatMap((study, index) => {
       const itemId =
@@ -911,6 +1271,13 @@ export class LearningEngineService {
       const text = study.text ?? study.title ?? study.prompt ?? study.content;
       const meaning =
         study.meaning ?? study.translation ?? study.explanation ?? study.answer ?? "";
+      const topicKey =
+        normalizeTopicKey(study.topicKey) ??
+        normalizeTopicKey(study.topic) ??
+        normalizeTopicKey(study.concept) ??
+        extractTopicKeyFromMetadata(study.metadata as Prisma.JsonValue | null | undefined) ??
+        normalizeTopicKey(itemId) ??
+        itemId;
 
       if (!itemId || !text) {
         return [];
@@ -921,6 +1288,7 @@ export class LearningEngineService {
           itemId,
           text,
           meaning,
+          topicKey,
           source: "remote",
           order: study.order ?? study.position ?? index + 1,
         },

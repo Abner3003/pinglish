@@ -6,6 +6,13 @@ const EnvSchema = z.object({
     .enum(["development", "test", "production"])
     .default("development"),
   PORT: z.coerce.number().int().positive().default(3000),
+  ENABLE_JOB_SCHEDULER: z
+    .enum(["true", "false"])
+    .default(process.env.NODE_ENV === "production" ? "true" : "false")
+    .transform((value) => value === "true"),
+  JOB_SCHEDULER_TIMEZONE: z.string().min(1).default("America/Sao_Paulo"),
+  DAILY_STUDY_PACKS_CRON: z.string().min(1).default("0 7 * * *"),
+  STUDY_PACK_REVIEWS_CRON: z.string().min(1).default("*/15 * * * *"),
   DATABASE_URL: z.string().optional(),
   AWS_REGION: z.string().optional(),
   LEADS_EVENTS_QUEUE_URL: z.string().optional(),

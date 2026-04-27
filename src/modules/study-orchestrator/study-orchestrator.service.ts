@@ -10,6 +10,7 @@ type StudyPackStudy = {
   itemId: string;
   text: string;
   meaning: string;
+  topicKey?: string;
   source?: string;
   order?: number;
   type?: LearningItemType;
@@ -114,6 +115,11 @@ function normalizeStudyEntry(value: unknown, index: number): StudyPackStudy[] {
     (typeof value.explanation === "string" && value.explanation) ||
     (typeof value.answer === "string" && value.answer) ||
     "";
+  const topicKey =
+    (typeof value.topicKey === "string" && value.topicKey) ||
+    (typeof value.topic === "string" && value.topic) ||
+    (typeof value.concept === "string" && value.concept) ||
+    (isRecord(value.metadata) && typeof value.metadata.topic === "string" ? value.metadata.topic : undefined);
 
   if (!itemId || !text) {
     return [];
@@ -132,6 +138,7 @@ function normalizeStudyEntry(value: unknown, index: number): StudyPackStudy[] {
       itemId,
       text,
       meaning,
+      topicKey,
       source: typeof value.source === "string" ? value.source : undefined,
       order,
       type,
@@ -167,6 +174,14 @@ function buildBotReply(input: BotReplyInput): string {
   }
 
   return `Beleza, ${input.userName}. Se quiser seguir estudando em ${languageHint}, eu continuo daqui.`;
+}
+
+function formatStudyPrompt(study: { text: string; meaning?: string | null }): string {
+  if (!study.meaning) {
+    return study.text;
+  }
+
+  return `${study.text} - ${study.meaning}`;
 }
 
 function addHours(date: Date, hours: number): Date {
@@ -287,10 +302,19 @@ export class StudyOrchestratorService {
       currentStudyItem,
       analysisRequest: currentStudyItem && pack
         ? {
+            schema_version: "v1",
+            task_type: "review",
+            user_id: userId,
             userId,
             packageId: pack.id,
             packItemId: currentStudyItem.itemId,
-            userResponse: "",
+            mode: "teach",
+            session_id: pack.id,
+            lesson_goal: "translation",
+            difficulty: "easy",
+            topic: currentStudyItem.topicKey ?? currentStudyItem.itemId,
+            language: "pt-BR",
+            user_answer: "",
           }
         : null,
     };
@@ -363,7 +387,7 @@ export class StudyOrchestratorService {
       replyText: [
         "Seu primeiro estudo está pronto:",
         "",
-        `1. ${firstItem.text} - ${firstItem.meaning}`,
+        `1. ${formatStudyPrompt(firstItem)}`,
         "",
         "Responda com o que você entendeu.",
       ].join("\n"),
@@ -437,11 +461,41 @@ export class StudyOrchestratorService {
       };
     }
 
+    const conceptState = await prisma.userConceptState.findUnique({
+      where: {
+        userId_topicKey: {
+          userId: input.userId,
+          topicKey: currentItem.topicKey ?? currentItem.itemId,
+        },
+      },
+    });
+
+    const reviewMode =
+      conceptState?.lastResult === "correct" || (conceptState?.lastAnswerQuality ?? 0) >= 4
+        ? "drill"
+        : "remediate";
+
     const analysisRequest = studyPackProviderService.buildAnalyzePackItemRequestPayload({
       userId: input.userId,
       packageId: pack.packId,
       packItemId: currentItem.itemId,
-      userResponse: input.text,
+      mode: reviewMode,
+      sessionId: pack.packId,
+      lessonGoal: "translation",
+      difficulty: "easy",
+      topic: currentItem.topicKey ?? currentItem.itemId,
+      language: "pt-BR",
+      userAnswer: input.text,
+      context: {
+        history_summary:
+          conceptState?.conceptSeenAt && conceptState.lastResult === "correct"
+            ? "usuário já respondeu corretamente esse conceito antes"
+            : "usuário está respondendo a um conceito em estudo",
+        last_error:
+          conceptState?.lastResult && conceptState.lastResult !== "correct"
+            ? "resposta anterior não consolidou o conceito"
+            : undefined,
+      },
     });
 
     const analysis = await studyPackProviderService.analyzePackItemResponse(analysisRequest);
@@ -485,7 +539,7 @@ export class StudyOrchestratorService {
           "",
           `Próximo:`,
           "",
-          `${currentIndex + 2}. ${nextItem.text} - ${nextItem.meaning}`,
+          `${currentIndex + 2}. ${formatStudyPrompt(nextItem)}`,
         ].join("\n"),
         answerQuality: scoreToQuality(analysis.data.score ?? 0),
         confidence: analysis.data.score ? Math.min(1, Math.max(0.3, analysis.data.score / 100)) : 0.4,
