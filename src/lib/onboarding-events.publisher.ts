@@ -30,6 +30,12 @@ export class SqsOnboardingEventsPublisher implements OnboardingEventsPublisher {
     const body = JSON.stringify(event);
     const isFifoQueue = this.queueUrl.endsWith(".fifo");
 
+    console.info("[onboarding-events] published event", {
+      eventType: event.type,
+      payload: event,
+      queueUrl: this.queueUrl,
+    });
+
     await this.client.send(
       new SendMessageCommand({
         QueueUrl: this.queueUrl,
@@ -65,4 +71,3 @@ export function buildOnboardingEventsPublisher(): OnboardingEventsPublisher {
     env.AWS_REGION,
   );
 }
-
