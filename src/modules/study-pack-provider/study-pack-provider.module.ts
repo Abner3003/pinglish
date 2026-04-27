@@ -2,9 +2,9 @@ import { studyPackProviderService } from "./study-pack-provider.service.js";
 
 export { studyPackProviderService };
 export type {
-  AnalyzePackItemInput,
-  AnalyzePackItemRequestPayload,
-  PackItemAnalysisResult,
+  ReviewRequestInput,
+  ReviewRequestPayload,
+  ReviewResultPayload,
   RemoteStudyItem,
   RemoteStudyPackInput,
   RemoteStudyPackResult,

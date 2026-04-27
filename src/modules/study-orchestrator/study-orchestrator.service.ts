@@ -3,7 +3,7 @@ import { prisma } from "../../lib/prisma.js";
 import { learningEngineService } from "../learning-engine/learning-engine.module.js";
 import {
   studyPackProviderService,
-  type AnalyzePackItemRequestPayload,
+  type ReviewRequestPayload,
 } from "../study-pack-provider/study-pack-provider.module.js";
 
 type StudyPackStudy = {
@@ -66,7 +66,7 @@ type CurrentStudyContext = {
     completed: boolean;
   } | null;
   currentStudyItem: StudyPackStudy | null;
-  analysisRequest: AnalyzePackItemRequestPayload | null;
+  analysisRequest: ReviewRequestPayload | null;
 };
 
 type BotReplyInput = {
@@ -475,17 +475,17 @@ export class StudyOrchestratorService {
         ? "drill"
         : "remediate";
 
-    const analysisRequest = studyPackProviderService.buildAnalyzePackItemRequestPayload({
+    const analysisRequest = studyPackProviderService.buildReviewRequestPayload({
       userId: input.userId,
       packageId: pack.packId,
       packItemId: currentItem.itemId,
       mode: reviewMode,
-      sessionId: pack.packId,
-      lessonGoal: "translation",
+      session_id: pack.packId,
+      lesson_goal: "translation",
       difficulty: "easy",
       topic: currentItem.topicKey ?? currentItem.itemId,
       language: "pt-BR",
-      userAnswer: input.text,
+      user_answer: input.text,
       context: {
         history_summary:
           conceptState?.conceptSeenAt && conceptState.lastResult === "correct"
@@ -498,7 +498,7 @@ export class StudyOrchestratorService {
       },
     });
 
-    const analysis = await studyPackProviderService.analyzePackItemResponse(analysisRequest);
+    const analysis = await studyPackProviderService.analyzeReviewResponse(analysisRequest);
 
     if (!analysis) {
       return {
@@ -512,7 +512,7 @@ export class StudyOrchestratorService {
       packId: channel.currentPackId ?? pack.packId,
       eventType: "ANSWERED",
       answerQuality: scoreToQuality(analysis.data.score ?? 0),
-      isCorrect: analysis.data.status === "correct" || analysis.data.status === "partial",
+      isCorrect: analysis.data.correct,
       xpEarned: analysis.data.xp ?? 0,
     });
 
@@ -535,7 +535,9 @@ export class StudyOrchestratorService {
         replyText: [
           analysis.data.feedback || "Resposta registrada.",
           "",
-          analysis.data.nextStep || "Vamos para o próximo item.",
+          analysis.data.corrections.length > 0
+            ? analysis.data.corrections.join("\n")
+            : "Vamos para o próximo item.",
           "",
           `Próximo:`,
           "",

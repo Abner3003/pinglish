@@ -11,8 +11,8 @@ export type RemoteStudyPackInput = {
   level: StudyPackLevel;
   interests: string[];
   mode: "teach" | "drill" | "remediate";
-  sessionId: string;
-  lessonGoal: string;
+  session_id: string;
+  lesson_goal: string;
   difficulty: string;
   topic: string;
   language: string;
@@ -69,12 +69,12 @@ export type ReviewRequestInput = {
   packageId: string;
   packItemId: string;
   mode: "teach" | "drill" | "remediate";
-  sessionId: string;
-  lessonGoal: string;
+  session_id: string;
+  lesson_goal: string;
   difficulty: string;
   topic: string;
   language: string;
-  userAnswer: string;
+  user_answer: string;
   context?: {
     history_summary?: string;
     last_error?: string;
@@ -531,8 +531,8 @@ export class StudyPackProviderService {
       task_type: "lesson",
       mode: input.mode ?? "teach",
       user_id: input.userId,
-      session_id: input.sessionId,
-      lesson_goal: input.lessonGoal,
+      session_id: input.session_id,
+      lesson_goal: input.lesson_goal,
       difficulty: input.difficulty,
       topic: input.topic,
       language: input.language,
@@ -540,19 +540,19 @@ export class StudyPackProviderService {
     };
   }
 
-  buildAnalyzePackItemRequestPayload(
-    input: AnalyzePackItemInput,
-  ): AnalyzePackItemRequestPayload {
+  buildReviewRequestPayload(
+    input: ReviewRequestInput,
+  ): ReviewRequestPayload {
     return {
       schema_version: "v1",
       task_type: "review",
       user_id: input.userId,
-      session_id: input.sessionId,
-      lesson_goal: input.lessonGoal,
+      session_id: input.session_id,
+      lesson_goal: input.lesson_goal,
       difficulty: input.difficulty,
       topic: input.topic,
       language: input.language,
-      user_answer: input.userAnswer,
+      user_answer: input.user_answer,
       context: input.context,
       userId: input.userId,
       packageId: input.packageId,
@@ -707,7 +707,7 @@ export class StudyPackProviderService {
     return null;
   }
 
-  async analyzePackItemResponse(input: AnalyzePackItemRequestPayload): Promise<PackItemAnalysisResult | null> {
+  async analyzeReviewResponse(input: ReviewRequestPayload): Promise<ReviewResultPayload | null> {
     if (!env.STUDY_PACK_SERVICE_BASE_URL) {
       return null;
     }
@@ -743,16 +743,17 @@ export class StudyPackProviderService {
       if (response.ok && analysisData) {
         return {
           ok: true,
-          mode: "item_analysis",
+          mode: "review_result",
           data: analysisData,
         };
       }
     } catch (error) {
-      console.warn("[study-pack-provider] analyzePackItemResponse failed", error);
+      console.warn("[study-pack-provider] analyzeReviewResponse failed", error);
     }
 
     return null;
   }
+
 }
 
 export const studyPackProviderService = new StudyPackProviderService();

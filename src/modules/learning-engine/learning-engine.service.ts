@@ -612,9 +612,9 @@ export class LearningEngineService {
   private async resolvePrimaryLessonContext(input: GeneratePackInput): Promise<{
     topicKey: string;
     mode: LessonMode;
-    sessionId: string;
+    session_id: string;
     difficulty: string;
-  lessonGoal: string;
+  lesson_goal: string;
   language: string;
   conceptState: ConceptStateRecord | null;
   historySummary: string;
@@ -734,9 +734,9 @@ export class LearningEngineService {
     return {
       topicKey,
       mode: resolveLessonMode(conceptState),
-      sessionId: randomUUID(),
+      session_id: randomUUID(),
       difficulty: resolveDifficultyLabel(selectedItem.difficulty),
-      lessonGoal: "translation",
+      lesson_goal: "translation",
       language: profile?.nativeLanguage ?? "pt-BR",
       historySummary: conceptState?.conceptSeenAt
         ? conceptState.lastResult === "correct"
@@ -814,8 +814,8 @@ export class LearningEngineService {
       level,
       interests: learningProfile?.interests ?? [],
       mode: lessonContext.mode,
-      sessionId: lessonContext.sessionId,
-      lessonGoal: lessonContext.lessonGoal,
+      session_id: lessonContext.session_id,
+      lesson_goal: lessonContext.lesson_goal,
       difficulty: lessonContext.difficulty,
       topic: lessonContext.topicKey,
       language: lessonContext.language,
@@ -850,7 +850,7 @@ export class LearningEngineService {
       level,
       mode: lessonContext.mode,
       topicKey: lessonContext.topicKey,
-      sessionId: lessonContext.sessionId,
+      session_id: lessonContext.session_id,
       interests: learningProfile?.interests ?? [],
       studies,
       targetXp,
