@@ -390,7 +390,12 @@ export class StudyPackProviderService {
       return null;
     }
 
-    const candidatePaths = [env.STUDY_PACK_SERVICE_MOUNT_PATH, "/moutPack"];
+    const candidatePaths = [
+      env.STUDY_PACK_SERVICE_MOUNT_PATH,
+      "/packs/mountPack",
+      "/mountPack",
+      "/moutPack",
+    ];
 
     for (const path of candidatePaths) {
       const url = buildUrl(env.STUDY_PACK_SERVICE_BASE_URL, path);
@@ -433,9 +438,14 @@ export class StudyPackProviderService {
 
     const candidatePaths = [
       env.STUDY_PACK_SERVICE_GET_PACK_PATH,
+      "/packs/getPackById",
       "/getPackbyId",
+      "/getPackById",
+      "/packs/getPackbyId",
       `/getPackById/${encodeURIComponent(packId)}`,
       `/getPackbyId/${encodeURIComponent(packId)}`,
+      `/packs/getPackById/${encodeURIComponent(packId)}`,
+      `/packs/getPackbyId/${encodeURIComponent(packId)}`,
     ];
 
     for (const path of candidatePaths) {

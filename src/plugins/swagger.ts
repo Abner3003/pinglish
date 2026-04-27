@@ -6,6 +6,8 @@ import { jsonSchemaTransform } from "fastify-type-provider-zod";
 import { env } from "../config/env.js";
 
 export const swaggerPlugin: FastifyPluginAsync = fp(async (app) => {
+  const serverUrl = env.PUBLIC_BASE_URL ?? "/";
+
   await app.register(swagger, {
     transform: jsonSchemaTransform,
     openapi: {
@@ -14,7 +16,7 @@ export const swaggerPlugin: FastifyPluginAsync = fp(async (app) => {
         description: "API docs",
         version: "1.0.0",
       },
-      servers: [{ url: "http://localhost:" + env.PORT }],
+      servers: [{ url: serverUrl }],
     },
   });
 
