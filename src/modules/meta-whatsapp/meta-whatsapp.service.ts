@@ -33,13 +33,7 @@ function getString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
-function getOptionalString(value: unknown): string | null | undefined {
-  if (value === null) {
-    return null;
-  }
 
-  return typeof value === "string" ? value : undefined;
-}
 
 function normalizePhoneNumber(phone: string): string {
   return phone.replace(/[^\d]/g, "");
