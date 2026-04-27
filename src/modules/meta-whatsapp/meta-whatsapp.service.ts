@@ -470,7 +470,8 @@ export class MetaWhatsAppService {
   async sendWhatsAppMessage(to: string, text: string): Promise<string | null> {
     const integration = await this.getActiveIntegration();
     const token = env.WHATSAPP_TOKEN ?? integration?.accessToken ?? null;
-    const phoneNumberId = env.PHONE_NUMBER_ID ?? integration?.phoneNumberId ?? null;
+    const phoneNumberId =
+      env.WHATSAPP_PHONE_NUMBER_ID ?? env.PHONE_NUMBER_ID ?? integration?.phoneNumberId ?? null;
 
     if (!token || !phoneNumberId) {
       throw new Error("Meta WhatsApp is not configured");

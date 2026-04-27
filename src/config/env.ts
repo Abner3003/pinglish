@@ -28,6 +28,7 @@ const EnvSchema = z.object({
     .default(300),
   WHATSAPP_VERIFY_TOKEN: z.string().min(1).optional(),
   WHATSAPP_TOKEN: z.string().min(1).optional(),
+  WHATSAPP_PHONE_NUMBER_ID: z.string().min(1).optional(),
   PHONE_NUMBER_ID: z.string().min(1).optional(),
   GRAPH_API_VERSION: z.string().min(1).default("v22.0"),
   META_WHATSAPP_APP_ID: z.string().min(1).optional(),
