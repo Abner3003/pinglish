@@ -1,9 +1,10 @@
 /* eslint-disable no-useless-assignment */
 import { randomUUID } from "node:crypto";
+import { UserJourneyLevel, UserLearningStateStatus, type Prisma } from "../../generated/prisma/index.js";
 import { prisma } from "../../lib/prisma.js";
-import {  UserJourneyLevel, UserLearningStateStatus, type Prisma } from "../../generated/prisma/index.js";
 import { studyPackProviderService } from "../study-pack-provider/study-pack-provider.module.js";
 import { resolveDefaultTenantId } from "../tenants/default-tenant.service.js";
+import { ensureTenantHasSeedItems } from "../tenants/tenant-seed-items.js";
 
 type AnswerQuality = 0 | 1 | 2 | 3 | 4 | 5;
 type StudyEventType = "ANSWERED" | "REVIEWED" | "SKIPPED" | "LESSON_COMPLETED";
@@ -630,6 +631,9 @@ export class LearningEngineService {
     const level = journey?.level ?? UserJourneyLevel.INICIANTE;
     const tenantId =
       input.tenantId ?? profile?.tenantId ?? (await resolveDefaultTenantId());
+    if (tenantId) {
+      await ensureTenantHasSeedItems(tenantId, prisma);
+    }
     const now = new Date();
 
     const dueStates = await prisma.userLearningState.findMany({
@@ -675,7 +679,7 @@ export class LearningEngineService {
       },
     });
 
-    const stateByItemId = new Map(
+      const stateByItemId = new Map(
       (
         await prisma.userLearningState.findMany({
           where: {
@@ -715,6 +719,16 @@ export class LearningEngineService {
     const selectedItem = dueCandidate ?? reinforcementCandidate ?? newCandidate ?? allItems[0] ?? null;
 
     if (!selectedItem) {
+      console.warn(
+        {
+          scope: "learning-engine",
+          step: "resolvePrimaryLessonContext",
+          reason: "no-selected-item",
+          userId: input.userId,
+          tenantId,
+        },
+        "[penglish-ai] skipped",
+      );
       return null;
     }
 

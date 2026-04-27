@@ -1,7 +1,12 @@
 import { env } from "../../config/env.js";
 import { prisma } from "../../lib/prisma.js";
+import { ensureTenantHasSeedItems as ensureSeedItemsForTenant } from "./tenant-seed-items.js";
 
 let cachedDefaultTenantId: string | null | undefined;
+
+async function ensureTenantHasSeedItems(tenantId: string): Promise<void> {
+  await ensureSeedItemsForTenant(tenantId, prisma);
+}
 
 async function createDefaultTenantIfPossible(): Promise<string | null> {
   const professional = await prisma.professional.findFirst({
@@ -57,9 +62,13 @@ export async function resolveDefaultTenantId(): Promise<string | null> {
 
   if (existingTenant) {
     cachedDefaultTenantId = existingTenant.id;
+    await ensureTenantHasSeedItems(cachedDefaultTenantId);
     return cachedDefaultTenantId;
   }
 
   cachedDefaultTenantId = await createDefaultTenantIfPossible();
+  if (cachedDefaultTenantId) {
+    await ensureTenantHasSeedItems(cachedDefaultTenantId);
+  }
   return cachedDefaultTenantId ?? null;
 }
