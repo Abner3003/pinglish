@@ -174,54 +174,52 @@ export const onboardingRoutes: FastifyPluginAsync = async (app) => {
       },
     },
     async (request, reply) => {
-      const result = await prisma.$transaction(async (tx) => {
-        const user = await tx.user.upsert({
-          where: {
-            email: request.body.email,
-          },
-          update: {
-            name: request.body.name,
-            phone: request.body.phone,
-            ...(request.body.planId !== undefined ? { planId: request.body.planId } : {}),
-          },
-          create: {
-            name: request.body.name,
-            email: request.body.email,
-            phone: request.body.phone,
-            ...(request.body.planId !== undefined ? { planId: request.body.planId } : {}),
-          },
-          select: {
-            id: true,
-            name: true,
-            email: true,
-            phone: true,
-            planId: true,
-          },
-        });
-
-        const userChannel = await tx.userChannel.upsert({
-          where: {
-            userId: user.id,
-          },
-          update: {
-            status: "ONBOARDING",
-            onboardingStep: 1,
-          },
-          create: {
-            userId: user.id,
-            status: "ONBOARDING",
-            onboardingStep: 1,
-          },
-          select: {
-            id: true,
-            userId: true,
-            status: true,
-            onboardingStep: true,
-          },
-        });
-
-        return { user, userChannel };
+      const user = await prisma.user.upsert({
+        where: {
+          email: request.body.email,
+        },
+        update: {
+          name: request.body.name,
+          phone: request.body.phone,
+          ...(request.body.planId !== undefined ? { planId: request.body.planId } : {}),
+        },
+        create: {
+          name: request.body.name,
+          email: request.body.email,
+          phone: request.body.phone,
+          ...(request.body.planId !== undefined ? { planId: request.body.planId } : {}),
+        },
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          phone: true,
+          planId: true,
+        },
       });
+
+      const userChannel = await prisma.userChannel.upsert({
+        where: {
+          userId: user.id,
+        },
+        update: {
+          status: "ONBOARDING",
+          onboardingStep: 1,
+        },
+        create: {
+          userId: user.id,
+          status: "ONBOARDING",
+          onboardingStep: 1,
+        },
+        select: {
+          id: true,
+          userId: true,
+          status: true,
+          onboardingStep: true,
+        },
+      });
+
+      const result = { user, userChannel };
 
       await onboardingEventsPublisher.publishUserCreated({
         eventId: getUserCreatedEventId(result.user.id),
