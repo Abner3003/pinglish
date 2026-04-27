@@ -461,13 +461,7 @@ export class LearningEngineService {
   }
 
   async generateDailyStudyPack(input: GeneratePackInput) {
-    const remotePack = await this.generateRemoteDailyStudyPack(input);
-
-    if (remotePack) {
-      return remotePack;
-    }
-
-    return this.generateLocalDailyStudyPack(input);
+    return this.generateRemoteDailyStudyPack(input);
   }
 
   private async generateRemoteDailyStudyPack(input: GeneratePackInput) {

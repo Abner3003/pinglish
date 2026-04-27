@@ -641,6 +641,17 @@ export class MetaWhatsAppService {
 
     const studySession = await studyOrchestratorService.startDailyStudySession(user.id);
 
+    if (!studySession) {
+      this.logger.warn(
+        `[meta-whatsapp] study session unavailable phone=${phone} userId=${user.id}`,
+      );
+      return;
+    }
+
+    if (!studySession.replyText) {
+      return;
+    }
+
     await this.sendWhatsAppMessage(user.phone, studySession.replyText);
 
     this.logger.info(

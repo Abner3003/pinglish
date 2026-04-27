@@ -33,6 +33,10 @@ const responseSchema = z.object({
   dailyStudyPack: packRecordSchema,
 });
 
+const unavailableResponseSchema = z.object({
+  message: z.string(),
+});
+
 const packByUserResponseSchema = z.object({
   packId: z.string().min(1),
   targetXp: z.number().int().nonnegative(),
@@ -242,17 +246,26 @@ export const dailyStudyPackRoutes: FastifyPluginAsync = async (app) => {
   typedApp.get(
     "/by-user/:userId/today",
     {
-      schema: {
+    schema: {
         tags: ["DailyStudyPacks"],
         summary: "Get today study pack by user",
         params: z.object({
           userId: z.string().min(1),
         }),
-        response: { 200: packByUserResponseSchema },
+        response: {
+          200: packByUserResponseSchema,
+          503: unavailableResponseSchema,
+        },
       },
     },
-    async (request) => {
+    async (request, reply) => {
       const pack = await studyOrchestratorService.getTodayPackForUser(request.params.userId);
+
+      if (!pack) {
+        return reply.code(503).send({
+          message: "Study pack service unavailable",
+        });
+      }
 
       return {
         packId: pack.packId,
@@ -370,6 +383,7 @@ export const dailyStudyPackRoutes: FastifyPluginAsync = async (app) => {
         }),
         response: {
           201: responseSchema,
+          503: unavailableResponseSchema,
         },
       },
     },
@@ -379,6 +393,12 @@ export const dailyStudyPackRoutes: FastifyPluginAsync = async (app) => {
         tenantId: request.body.tenantId ?? null,
         date: request.body.date ?? new Date(),
       });
+
+      if (!result) {
+        return reply.code(503).send({
+          message: "Study pack service unavailable",
+        });
+      }
 
       return reply.code(201).send({
         dailyStudyPack: toRecord(result.pack),

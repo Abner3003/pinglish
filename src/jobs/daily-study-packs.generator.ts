@@ -11,6 +11,11 @@ async function main(): Promise<void> {
   for (const user of users) {
     const result = await studyOrchestratorService.getTodayPackForUser(user.id);
 
+    if (!result) {
+      console.warn(`[daily-study-packs] pack unavailable userId=${user.id}`);
+      continue;
+    }
+
     console.log(
       `[daily-study-packs] ensured pack id=${result.packId} userId=${user.id}`,
     );

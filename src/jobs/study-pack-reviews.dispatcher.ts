@@ -46,7 +46,10 @@ async function main(): Promise<void> {
 
     const session = await studyOrchestratorService.startDailyStudySession(user.id);
 
-    if (!session.replyText) {
+    if (!session || !session.replyText) {
+      console.warn(
+        `[study-pack-reviews] session unavailable packId=${pack.id} userId=${user.id}`,
+      );
       continue;
     }
 

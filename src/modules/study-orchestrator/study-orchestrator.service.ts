@@ -183,7 +183,7 @@ function scoreToQuality(score: number): 0 | 1 | 2 | 3 | 4 | 5 {
 }
 
 export class StudyOrchestratorService {
-  async getTodayPackForUser(userId: string): Promise<PackResult> {
+  async getTodayPackForUser(userId: string): Promise<PackResult | null> {
     const today = new Date();
     const startOfDay = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()));
 
@@ -211,6 +211,10 @@ export class StudyOrchestratorService {
     }
 
     const result = await learningEngineService.generateDailyStudyPack({ userId });
+    if (!result) {
+      return null;
+    }
+
     const packItems = normalizeStudies(result.pack.items);
     const studies = result.studies.length > 0 ? result.studies : packItems;
 
@@ -292,7 +296,7 @@ export class StudyOrchestratorService {
     };
   }
 
-  async startDailyStudySession(userId: string): Promise<{ replyText: string; packId: string | null; itemId: string | null }> {
+  async startDailyStudySession(userId: string): Promise<{ replyText: string; packId: string | null; itemId: string | null } | null> {
     const user = await prisma.user.findUnique({
       where: { id: userId },
       select: {
@@ -310,6 +314,9 @@ export class StudyOrchestratorService {
     }
 
     const pack = await this.getTodayPackForUser(userId);
+    if (!pack) {
+      return null;
+    }
     const firstItem = pack.studies[0] ?? null;
 
     await prisma.dailyStudyPack.update({
@@ -405,6 +412,11 @@ export class StudyOrchestratorService {
     }
 
     const pack = await this.getTodayPackForUser(input.userId);
+    if (!pack) {
+      return {
+        kind: "ignored",
+      };
+    }
     const currentItem = pack.studies.find((study) => study.itemId === channel.currentStudyItemId);
 
     if (!currentItem) {
@@ -434,14 +446,20 @@ export class StudyOrchestratorService {
 
     const analysis = await studyPackProviderService.analyzePackItemResponse(analysisRequest);
 
+    if (!analysis) {
+      return {
+        kind: "ignored",
+      };
+    }
+
     await learningEngineService.recordStudyEvent({
       userId: input.userId,
       itemId: currentItem.itemId,
       packId: channel.currentPackId ?? pack.packId,
       eventType: "ANSWERED",
-      answerQuality: scoreToQuality(analysis?.data.score ?? 0),
-      isCorrect: (analysis?.data.status ?? "unclear") === "correct" || (analysis?.data.status ?? "unclear") === "partial",
-      xpEarned: analysis?.data.xp ?? 0,
+      answerQuality: scoreToQuality(analysis.data.score ?? 0),
+      isCorrect: analysis.data.status === "correct" || analysis.data.status === "partial",
+      xpEarned: analysis.data.xp ?? 0,
     });
 
     const currentIndex = pack.studies.findIndex((study) => study.itemId === currentItem.itemId);
@@ -461,17 +479,17 @@ export class StudyOrchestratorService {
       return {
         kind: "study",
         replyText: [
-          analysis?.data.feedback || "Resposta registrada.",
+          analysis.data.feedback || "Resposta registrada.",
           "",
-          analysis?.data.nextStep || "Vamos para o próximo item.",
+          analysis.data.nextStep || "Vamos para o próximo item.",
           "",
           `Próximo:`,
           "",
           `${currentIndex + 2}. ${nextItem.text} - ${nextItem.meaning}`,
         ].join("\n"),
-        answerQuality: scoreToQuality(analysis?.data.score ?? 0),
-        confidence: analysis?.data.score ? Math.min(1, Math.max(0.3, analysis.data.score / 100)) : 0.4,
-        reason: analysis?.data.source ?? "fallback",
+        answerQuality: scoreToQuality(analysis.data.score ?? 0),
+        confidence: analysis.data.score ? Math.min(1, Math.max(0.3, analysis.data.score / 100)) : 0.4,
+        reason: analysis.data.source,
         packId: pack.packId,
         itemId: nextItem.itemId,
         awaitingStudyReply: true,
@@ -480,7 +498,7 @@ export class StudyOrchestratorService {
 
     const now = new Date();
     const retryMessage = [
-      analysis?.data.feedback || "Resposta registrada.",
+      analysis.data.feedback || "Resposta registrada.",
       "",
       "Seu pack terminou por agora.",
       "Vou reagendar esse mesmo pack para daqui a 2 horas.",
@@ -510,9 +528,9 @@ export class StudyOrchestratorService {
     return {
       kind: "study",
       replyText: retryMessage,
-      answerQuality: scoreToQuality(analysis?.data.score ?? 0),
-      confidence: analysis?.data.score ? Math.min(1, Math.max(0.3, analysis.data.score / 100)) : 0.4,
-      reason: analysis?.data.source ?? "fallback",
+      answerQuality: scoreToQuality(analysis.data.score ?? 0),
+      confidence: analysis.data.score ? Math.min(1, Math.max(0.3, analysis.data.score / 100)) : 0.4,
+      reason: analysis.data.source,
       packId: pack.packId,
       itemId: currentItem.itemId,
       awaitingStudyReply: false,

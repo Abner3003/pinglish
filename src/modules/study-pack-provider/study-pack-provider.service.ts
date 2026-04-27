@@ -64,6 +64,9 @@ export type AnalyzePackItemRequestPayload = AnalyzePackItemInput;
 
 type JsonRecord = Record<string, unknown>;
 
+const REMOTE_REQUEST_RETRIES = 3;
+const REMOTE_REQUEST_RETRY_DELAY_MS = 500;
+
 function isRecord(value: unknown): value is JsonRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -78,6 +81,45 @@ function getNumber(value: unknown): number | undefined {
 
 function buildUrl(baseUrl: string, path: string): string {
   return new URL(path, baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`).toString();
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function isRetryableRemoteFailure(error: unknown): boolean {
+  if (error instanceof TypeError) {
+    return true;
+  }
+
+  if (error instanceof Error && /fetch|network|timeout/i.test(error.message)) {
+    return true;
+  }
+
+  return false;
+}
+
+async function retryRemoteCall<T>(operation: () => Promise<T>): Promise<T> {
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= REMOTE_REQUEST_RETRIES; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+
+      if (attempt < REMOTE_REQUEST_RETRIES && isRetryableRemoteFailure(error)) {
+        await sleep(REMOTE_REQUEST_RETRY_DELAY_MS * attempt);
+        continue;
+      }
+
+      throw error;
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error("Remote request failed");
 }
 
 function extractPackId(payload: unknown): string | null {
@@ -373,6 +415,10 @@ async function fetchJson(
   }
 }
 
+function shouldRetryStatus(status: number): boolean {
+  return status >= 500 || status === 429;
+}
+
 export class StudyPackProviderService {
   buildAnalyzePackItemRequestPayload(
     input: AnalyzePackItemInput,
@@ -390,95 +436,127 @@ export class StudyPackProviderService {
       return null;
     }
 
-    const candidatePaths = [
-      env.STUDY_PACK_SERVICE_MOUNT_PATH,
-      "/packs/mountPack",
-      "/mountPack",
-      "/moutPack",
-    ];
+    try {
+      const candidatePaths = [
+        env.STUDY_PACK_SERVICE_MOUNT_PATH,
+        "/packs/mountPack",
+        "/mountPack",
+        "/moutPack",
+      ].filter((path): path is string => Boolean(path));
 
-    for (const path of candidatePaths) {
-      const url = buildUrl(env.STUDY_PACK_SERVICE_BASE_URL, path);
-      const response = await fetchJson(url, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(env.STUDY_PACK_SERVICE_TOKEN
-            ? { Authorization: `Bearer ${env.STUDY_PACK_SERVICE_TOKEN}` }
-            : {}),
-        },
-        body: JSON.stringify(input),
-      });
+      for (const path of candidatePaths) {
+        if (!path) {
+          continue;
+        }
 
-      if (response.ok) {
-        const remotePackId = extractPackId(response.body);
+        const url = buildUrl(env.STUDY_PACK_SERVICE_BASE_URL, path);
 
-        if (remotePackId) {
-          return {
-            remotePackId,
-            targetXp: extractTargetXp(response.body),
-            studies: extractStudies(response.body),
-            raw: response.body,
-          };
+        const response = await retryRemoteCall(async () => {
+          const result = await fetchJson(url, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              ...(env.STUDY_PACK_SERVICE_TOKEN
+                ? { Authorization: `Bearer ${env.STUDY_PACK_SERVICE_TOKEN}` }
+                : {}),
+            },
+            body: JSON.stringify(input),
+          });
+
+          if (!result.ok && shouldRetryStatus(result.status)) {
+            throw new Error(`Remote pack generation failed with status ${result.status}`);
+          }
+
+          return result;
+        });
+
+        if (response.ok) {
+          const remotePackId = extractPackId(response.body);
+
+          if (remotePackId) {
+            return {
+              remotePackId,
+              targetXp: extractTargetXp(response.body),
+              studies: extractStudies(response.body),
+              raw: response.body,
+            };
+          }
+        }
+
+        if (response.status !== 404) {
+          continue;
         }
       }
-
-      if (response.status !== 404) {
-        continue;
-      }
+    } catch (error) {
+      console.warn("[study-pack-provider] mountPack failed", error);
     }
 
     return null;
   }
 
   async getPackById(packId: string): Promise<RemoteStudyPackResult | null> {
-    if (!env.STUDY_PACK_SERVICE_BASE_URL) {
+    const baseUrl = env.STUDY_PACK_SERVICE_BASE_URL;
+
+    if (!baseUrl) {
       return null;
     }
 
-    const candidatePaths = [
-      env.STUDY_PACK_SERVICE_GET_PACK_PATH,
-      "/packs/getPackById",
-      "/getPackbyId",
-      "/getPackById",
-      "/packs/getPackbyId",
-      `/getPackById/${encodeURIComponent(packId)}`,
-      `/getPackbyId/${encodeURIComponent(packId)}`,
-      `/packs/getPackById/${encodeURIComponent(packId)}`,
-      `/packs/getPackbyId/${encodeURIComponent(packId)}`,
-    ];
+    try {
+      const candidatePaths = [
+        env.STUDY_PACK_SERVICE_GET_PACK_PATH,
+        "/packs/getPackById",
+        "/getPackbyId",
+        "/getPackById",
+        "/packs/getPackbyId",
+        `/getPackById/${encodeURIComponent(packId)}`,
+        `/getPackbyId/${encodeURIComponent(packId)}`,
+        `/packs/getPackById/${encodeURIComponent(packId)}`,
+        `/packs/getPackbyId/${encodeURIComponent(packId)}`,
+      ].filter((path): path is string => Boolean(path));
 
-    for (const path of candidatePaths) {
-      const resolvedUrl = path.includes(packId)
-        ? buildUrl(env.STUDY_PACK_SERVICE_BASE_URL, path)
-        : buildUrl(
-            env.STUDY_PACK_SERVICE_BASE_URL,
-            `${path.replace(/\/$/, "")}/${encodeURIComponent(packId)}`,
-          );
+      for (const path of candidatePaths) {
+        if (!path) {
+          continue;
+        }
 
-      const candidates = [
-        fetchJson(resolvedUrl, {
-          method: "GET",
-          headers: {
-            ...(env.STUDY_PACK_SERVICE_TOKEN
-              ? { Authorization: `Bearer ${env.STUDY_PACK_SERVICE_TOKEN}` }
-              : {}),
-          },
-        }),
-        fetchJson(buildUrl(env.STUDY_PACK_SERVICE_BASE_URL, path.replace(/\/$/, "")), {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            ...(env.STUDY_PACK_SERVICE_TOKEN
-              ? { Authorization: `Bearer ${env.STUDY_PACK_SERVICE_TOKEN}` }
-              : {}),
-          },
-          body: JSON.stringify({ packId }),
-        }),
-      ];
+        const resolvedUrl = path.includes(packId)
+          ? buildUrl(baseUrl, path)
+          : buildUrl(
+              baseUrl,
+              `${path.replace(/\/$/, "")}/${encodeURIComponent(packId)}`,
+            );
 
-      for (const responsePromise of candidates) {
-        const response = await responsePromise;
+        const response = await retryRemoteCall(async () => {
+          const getResult = await fetchJson(resolvedUrl, {
+            method: "GET",
+            headers: {
+              ...(env.STUDY_PACK_SERVICE_TOKEN
+                ? { Authorization: `Bearer ${env.STUDY_PACK_SERVICE_TOKEN}` }
+                : {}),
+            },
+          });
+
+          if (getResult.ok) {
+            return getResult;
+          }
+
+          const postResult = await fetchJson(buildUrl(baseUrl, path.replace(/\/$/, "")), {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              ...(env.STUDY_PACK_SERVICE_TOKEN
+                ? { Authorization: `Bearer ${env.STUDY_PACK_SERVICE_TOKEN}` }
+                : {}),
+            },
+            body: JSON.stringify({ packId }),
+          });
+
+          if (!postResult.ok && shouldRetryStatus(postResult.status)) {
+            throw new Error(`Remote pack fetch failed with status ${postResult.status}`);
+          }
+
+          return postResult.ok ? postResult : getResult;
+        });
 
         if (response.ok) {
           const studies = extractStudies(response.body);
@@ -491,6 +569,8 @@ export class StudyPackProviderService {
           };
         }
       }
+    } catch (error) {
+      console.warn("[study-pack-provider] getPackById failed", error);
     }
 
     return null;
@@ -498,45 +578,49 @@ export class StudyPackProviderService {
 
   async analyzePackItemResponse(input: AnalyzePackItemInput): Promise<PackItemAnalysisResult | null> {
     if (!env.STUDY_PACK_SERVICE_BASE_URL) {
-      return {
-        ok: true,
-        mode: "item_analysis",
-        data: await buildFallbackAnalysis(input),
-      };
+      return null;
     }
 
-    const url = buildUrl(
-      env.STUDY_PACK_SERVICE_BASE_URL,
-      env.STUDY_PACK_SERVICE_ANALYZE_PATH,
-    );
-    const payload = this.buildAnalyzePackItemRequestPayload(input);
+    try {
+      const url = buildUrl(
+        env.STUDY_PACK_SERVICE_BASE_URL,
+        env.STUDY_PACK_SERVICE_ANALYZE_PATH,
+      );
+      const payload = this.buildAnalyzePackItemRequestPayload(input);
 
-    const response = await fetchJson(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(env.STUDY_PACK_SERVICE_TOKEN
-          ? { Authorization: `Bearer ${env.STUDY_PACK_SERVICE_TOKEN}` }
-          : {}),
-      },
-      body: JSON.stringify(payload),
-    });
+      const response = await retryRemoteCall(async () => {
+        const result = await fetchJson(url, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(env.STUDY_PACK_SERVICE_TOKEN
+              ? { Authorization: `Bearer ${env.STUDY_PACK_SERVICE_TOKEN}` }
+              : {}),
+          },
+          body: JSON.stringify(payload),
+        });
 
-    const analysisData = extractAnalysisData(response.body);
+        if (!result.ok && shouldRetryStatus(result.status)) {
+          throw new Error(`Remote analysis failed with status ${result.status}`);
+        }
 
-    if (response.ok && analysisData) {
-      return {
-        ok: true,
-        mode: "item_analysis",
-        data: analysisData,
-      };
+        return result;
+      });
+
+      const analysisData = extractAnalysisData(response.body);
+
+      if (response.ok && analysisData) {
+        return {
+          ok: true,
+          mode: "item_analysis",
+          data: analysisData,
+        };
+      }
+    } catch (error) {
+      console.warn("[study-pack-provider] analyzePackItemResponse failed", error);
     }
 
-    return {
-      ok: true,
-      mode: "item_analysis",
-      data: await buildFallbackAnalysis(input),
-    };
+    return null;
   }
 }
 
