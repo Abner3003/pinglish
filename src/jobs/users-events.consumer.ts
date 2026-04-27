@@ -11,6 +11,7 @@ import {
 } from "../generated/prisma/index.js";
 import { env } from "../config/env.js";
 import { prisma } from "../lib/prisma.js";
+import { logWhatsAppRuntimeConfig } from "../lib/runtime-diagnostics.js";
 import { metaWhatsAppService } from "../modules/meta-whatsapp/meta-whatsapp.module.js";
 import {
   userCreatedEventSchema,
@@ -213,6 +214,7 @@ class SqsUsersEventsConsumer {
 
   async start(): Promise<void> {
     this.logger.info(`[users-worker] polling ${this.queueUrl}`);
+    logWhatsAppRuntimeConfig(this.logger, USERS_EVENTS_CONSUMER_NAME);
 
     while (!this.shouldStop) {
       const messages = await this.receiveMessages();

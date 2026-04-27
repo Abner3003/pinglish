@@ -1,7 +1,10 @@
 import { prisma } from "../lib/prisma.js";
+import { logWhatsAppRuntimeConfig } from "../lib/runtime-diagnostics.js";
 import { studyOrchestratorService } from "../modules/study-orchestrator/study-orchestrator.module.js";
 
 export async function runDailyStudyPacksGenerator(): Promise<void> {
+  logWhatsAppRuntimeConfig(console, "daily-study-packs-generator");
+
   const users = await prisma.user.findMany({
     select: {
       id: true,
