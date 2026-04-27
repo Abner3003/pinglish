@@ -783,6 +783,15 @@ export class LearningEngineService {
     const lessonContext = await this.resolvePrimaryLessonContext(input);
 
     if (!lessonContext) {
+      console.warn(
+        {
+          scope: "learning-engine",
+          step: "generateRemoteDailyStudyPack",
+          reason: "no-lesson-context",
+          userId: input.userId,
+        },
+        "[penglish-ai] skipped",
+      );
       return null;
     }
 
@@ -807,6 +816,19 @@ export class LearningEngineService {
         lastMode: lessonContext.mode,
       },
     });
+
+    console.info(
+      {
+        scope: "learning-engine",
+        step: "generateRemoteDailyStudyPack",
+        action: "mountPack",
+        userId: input.userId,
+        session_id: lessonContext.session_id,
+        mode: lessonContext.mode,
+        topic: lessonContext.topicKey,
+      },
+      "[penglish-ai] request",
+    );
 
     const mountResult = await studyPackProviderService.mountPack({
       userId: input.userId,
@@ -836,8 +858,29 @@ export class LearningEngineService {
     });
 
     if (!mountResult) {
+      console.warn(
+        {
+          scope: "learning-engine",
+          step: "generateRemoteDailyStudyPack",
+          reason: "mount-pack-returned-null",
+          userId: input.userId,
+          session_id: lessonContext.session_id,
+        },
+        "[penglish-ai] skipped",
+      );
       return null;
     }
+
+    console.info(
+      {
+        scope: "learning-engine",
+        step: "generateRemoteDailyStudyPack",
+        action: "getPackById",
+        userId: input.userId,
+        remotePackId: mountResult.remotePackId,
+      },
+      "[penglish-ai] request",
+    );
 
     const fetchedPack = (await studyPackProviderService.getPackById(mountResult.remotePackId)) ?? mountResult;
     const studies = this.normalizeRemoteStudies(fetchedPack.studies);
@@ -883,6 +926,19 @@ export class LearningEngineService {
           completed: false,
         },
     });
+
+    console.info(
+      {
+        scope: "learning-engine",
+        step: "generateRemoteDailyStudyPack",
+        ok: true,
+        userId: input.userId,
+        remotePackId: mountResult.remotePackId,
+        studiesCount: studies.length,
+        targetXp,
+      },
+      "[penglish-ai] response",
+    );
 
     return {
       pack,

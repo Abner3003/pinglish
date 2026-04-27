@@ -524,6 +524,13 @@ function shouldRetryStatus(status: number): boolean {
   return status >= 500 || status === 429;
 }
 
+function logRemoteStudyCall(
+  step: "mountPack" | "getPackById" | "analyzeReviewResponse",
+  details: Record<string, unknown>,
+): void {
+  console.info({ scope: "study-pack-provider", step, ...details }, "[penglish-ai] request");
+}
+
 export class StudyPackProviderService {
   buildLessonGenerationPayload(input: RemoteStudyPackInput): Record<string, unknown> {
     return {
@@ -582,6 +589,15 @@ export class StudyPackProviderService {
         const url = buildUrl(env.STUDY_PACK_SERVICE_BASE_URL, path);
         const payload = this.buildLessonGenerationPayload(input);
 
+        logRemoteStudyCall("mountPack", {
+          url,
+          userId: input.userId,
+          session_id: input.session_id,
+          mode: input.mode,
+          topic: input.topic,
+          level: input.level,
+        });
+
         const response = await retryRemoteCall(async () => {
           const result = await fetchJson(url, {
             method: "POST",
@@ -604,6 +620,18 @@ export class StudyPackProviderService {
         if (response.ok) {
           const remotePackId = extractPackId(response.body);
 
+          console.info(
+            {
+              scope: "study-pack-provider",
+              step: "mountPack",
+              ok: true,
+              remotePackId: remotePackId ?? null,
+              userId: input.userId,
+              session_id: input.session_id,
+            },
+            "[penglish-ai] response",
+          );
+
           if (remotePackId) {
             return {
               remotePackId,
@@ -613,6 +641,18 @@ export class StudyPackProviderService {
             };
           }
         }
+
+        console.warn(
+          {
+            scope: "study-pack-provider",
+            step: "mountPack",
+            ok: false,
+            status: response.status,
+            userId: input.userId,
+            session_id: input.session_id,
+          },
+          "[penglish-ai] response",
+        );
 
         if (response.status !== 404) {
           continue;
@@ -657,6 +697,11 @@ export class StudyPackProviderService {
               `${path.replace(/\/$/, "")}/${encodeURIComponent(packId)}`,
             );
 
+        logRemoteStudyCall("getPackById", {
+          url: resolvedUrl,
+          packId,
+        });
+
         const response = await retryRemoteCall(async () => {
           const getResult = await fetchJson(resolvedUrl, {
             method: "GET",
@@ -692,6 +737,17 @@ export class StudyPackProviderService {
         if (response.ok) {
           const studies = extractStudies(response.body);
 
+          console.info(
+            {
+              scope: "study-pack-provider",
+              step: "getPackById",
+              ok: true,
+              packId,
+              studiesCount: studies.length,
+            },
+            "[penglish-ai] response",
+          );
+
           return {
             remotePackId: packId,
             targetXp: extractTargetXp(response.body),
@@ -719,6 +775,14 @@ export class StudyPackProviderService {
       );
       const payload = input;
 
+      logRemoteStudyCall("analyzeReviewResponse", {
+        url,
+        userId: input.userId,
+        packageId: input.packageId,
+        packItemId: input.packItemId,
+        mode: input.mode,
+      });
+
       const response = await retryRemoteCall(async () => {
         const result = await fetchJson(url, {
           method: "POST",
@@ -741,12 +805,37 @@ export class StudyPackProviderService {
       const analysisData = extractAnalysisData(response.body);
 
       if (response.ok && analysisData) {
+        console.info(
+          {
+            scope: "study-pack-provider",
+            step: "analyzeReviewResponse",
+            ok: true,
+            userId: input.userId,
+            packageId: input.packageId,
+            packItemId: input.packItemId,
+          },
+          "[penglish-ai] response",
+        );
+
         return {
           ok: true,
           mode: "review_result",
           data: analysisData,
         };
       }
+
+      console.warn(
+        {
+          scope: "study-pack-provider",
+          step: "analyzeReviewResponse",
+          ok: false,
+          status: response.status,
+          userId: input.userId,
+          packageId: input.packageId,
+          packItemId: input.packItemId,
+        },
+        "[penglish-ai] response",
+      );
     } catch (error) {
       console.warn("[study-pack-provider] analyzeReviewResponse failed", error);
     }

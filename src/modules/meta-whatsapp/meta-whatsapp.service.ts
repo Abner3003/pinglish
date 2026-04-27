@@ -15,6 +15,7 @@ type WebhookPayload = Record<string, unknown>;
 type InboundMessage = {
   from: string;
   text: string;
+  messageId: string | null;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -219,6 +220,44 @@ function mergeStrings(current: string[], next: string[]): string[] {
 
 export class MetaWhatsAppService {
   constructor(private readonly logger: Logger = console) {}
+
+  private async sendTypingIndicator(replyToMessageId: string): Promise<void> {
+    const integration = await this.getActiveIntegration();
+    const token = env.WHATSAPP_TOKEN ?? integration?.accessToken ?? null;
+    const phoneNumberId =
+      env.WHATSAPP_PHONE_NUMBER_ID ?? env.PHONE_NUMBER_ID ?? integration?.phoneNumberId ?? null;
+
+    if (!token || !phoneNumberId) {
+      throw new Error("Meta WhatsApp is not configured");
+    }
+
+    const response = await fetch(
+      `https://graph.facebook.com/${env.GRAPH_API_VERSION}/${phoneNumberId}/messages`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          messaging_product: "whatsapp",
+          status: "read",
+          message_id: replyToMessageId,
+          typing_indicator: {
+            type: "text",
+          },
+        }),
+      },
+    );
+
+    const rawBody = await response.text();
+
+    if (!response.ok) {
+      throw new Error(
+        `Meta WhatsApp typing indicator failed with status ${response.status}: ${rawBody}`,
+      );
+    }
+  }
 
   private async upsertPartialKycUser(input: {
     userId: string;
@@ -517,6 +556,25 @@ export class MetaWhatsAppService {
     }
   }
 
+  private async sendReply(
+    to: string,
+    text: string,
+    replyToMessageId?: string | null,
+  ): Promise<string | null> {
+    if (replyToMessageId) {
+      try {
+        await this.sendTypingIndicator(replyToMessageId);
+      } catch (error) {
+        this.logger.warn(
+          { error, replyToMessageId },
+          "[meta-whatsapp] failed to send typing indicator",
+        );
+      }
+    }
+
+    return this.sendWhatsAppMessage(to, text);
+  }
+
   private async handleInboundMessage(message: InboundMessage): Promise<void> {
     const phone = normalizePhoneNumber(message.from);
     const text = message.text.trim();
@@ -576,7 +634,7 @@ export class MetaWhatsAppService {
         });
 
         if (result.kind !== "ignored") {
-          await this.sendWhatsAppMessage(user.phone, result.replyText);
+          await this.sendReply(user.phone, result.replyText, message.messageId);
         }
 
         return;
@@ -590,7 +648,7 @@ export class MetaWhatsAppService {
       const name = normalizeName(text);
 
       if (!name) {
-        await this.sendWhatsAppMessage(user.phone, buildReaskMessage(1));
+        await this.sendReply(user.phone, buildReaskMessage(1), message.messageId);
         return;
       }
 
@@ -603,7 +661,7 @@ export class MetaWhatsAppService {
         },
       });
 
-      await this.sendWhatsAppMessage(user.phone, buildOnboardingQuestion(2));
+      await this.sendReply(user.phone, buildOnboardingQuestion(2), message.messageId);
 
       await prisma.userChannel.update({
         where: {
@@ -622,7 +680,7 @@ export class MetaWhatsAppService {
         const likes = splitCommaList(text);
 
         if (likes.length === 0) {
-          await this.sendWhatsAppMessage(user.phone, buildReaskMessage(2));
+          await this.sendReply(user.phone, buildReaskMessage(2), message.messageId);
           return;
         }
 
@@ -631,7 +689,7 @@ export class MetaWhatsAppService {
           personalPreferences: likes,
         });
 
-        await this.sendWhatsAppMessage(user.phone, buildOnboardingQuestion(3));
+        await this.sendReply(user.phone, buildOnboardingQuestion(3), message.messageId);
 
         await prisma.userChannel.update({
           where: {
@@ -648,7 +706,7 @@ export class MetaWhatsAppService {
         const themes = splitCommaList(text);
 
         if (themes.length === 0) {
-          await this.sendWhatsAppMessage(user.phone, buildReaskMessage(3));
+          await this.sendReply(user.phone, buildReaskMessage(3), message.messageId);
           return;
         }
 
@@ -657,7 +715,7 @@ export class MetaWhatsAppService {
           personalPreferences: themes,
         });
 
-        await this.sendWhatsAppMessage(user.phone, buildOnboardingQuestion(4));
+        await this.sendReply(user.phone, buildOnboardingQuestion(4), message.messageId);
 
         await prisma.userChannel.update({
           where: {
@@ -676,7 +734,7 @@ export class MetaWhatsAppService {
           goal: resolveGoal(text),
         });
 
-        await this.sendWhatsAppMessage(user.phone, buildOnboardingQuestion(5));
+        await this.sendReply(user.phone, buildOnboardingQuestion(5), message.messageId);
 
         await prisma.userChannel.update({
           where: {
@@ -695,7 +753,7 @@ export class MetaWhatsAppService {
           languageLevel: resolveLevel(text),
         });
 
-        await this.sendWhatsAppMessage(user.phone, buildOnboardingQuestion(6));
+        await this.sendReply(user.phone, buildOnboardingQuestion(6), message.messageId);
 
         await prisma.userChannel.update({
           where: {
@@ -745,14 +803,24 @@ export class MetaWhatsAppService {
           this.logger.warn(
             `[meta-whatsapp] study session unavailable phone=${phone} userId=${user.id}`,
           );
+          await this.sendReply(
+            user.phone,
+            "Seu cadastro foi concluído, mas ainda não tenho um estudo pronto para você. Assim que ficar disponível, eu sigo daqui.",
+            message.messageId,
+          );
           return;
         }
 
         if (!studySession.replyText) {
+          await this.sendReply(
+            user.phone,
+            "Seu cadastro foi concluído, mas ainda estou preparando sua próxima atividade.",
+            message.messageId,
+          );
           return;
         }
 
-        await this.sendWhatsAppMessage(user.phone, studySession.replyText);
+        await this.sendReply(user.phone, studySession.replyText, message.messageId);
 
         this.logger.info(
           `[meta-whatsapp] onboarding completed phone=${phone} userId=${user.id} packId=${studySession.packId ?? "n/a"}`,
@@ -799,12 +867,14 @@ export class MetaWhatsAppService {
           }
 
           const from = getString(message.from);
+          const messageId = getString(message.id) ?? null;
           const text = this.extractMessageText(message);
 
           if (from && text) {
             messages.push({
               from,
               text,
+              messageId,
             });
           }
         }
