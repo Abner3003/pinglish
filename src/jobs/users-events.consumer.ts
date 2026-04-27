@@ -10,10 +10,11 @@ import {
 } from "../generated/prisma/index.js";
 import { env } from "../config/env.js";
 import { prisma } from "../lib/prisma.js";
+import { metaWhatsAppService } from "../modules/meta-whatsapp/meta-whatsapp.module.js";
 import {
-  leadResponseCreatedEventSchema,
-  type LeadResponseCreatedEvent,
-} from "../modules/twilio/twilio.events.js";
+  userCreatedEventSchema,
+  type UserCreatedEvent,
+} from "../modules/onboarding/onboarding.events.js";
 
 type Logger = Pick<typeof console, "info" | "warn" | "error">;
 
@@ -25,14 +26,25 @@ type ConsumerOptions = {
   lockTimeoutSeconds: number;
 };
 
-const INTERACTIONS_EVENTS_CONSUMER_NAME = "interactions-events-worker";
+const USERS_EVENTS_CONSUMER_NAME = "users-events-worker";
 
-class LeadResponseCreatedHandler {
-  constructor(private readonly logger: Logger) {}
+class UserCreatedHandler {
+  constructor(
+    private readonly logger: Logger,
+  ) {}
 
-  async handle(event: LeadResponseCreatedEvent): Promise<void> {
+  async handle(event: UserCreatedEvent): Promise<void> {
+    await metaWhatsAppService.sendWhatsAppMessage(
+      event.user.phone,
+      [
+        `Olá, ${event.user.name}! Seja muito bem-vindo ao Penglish 🎉`,
+        "Vou te fazer 5 perguntas rápidas para eu te conhecer melhor.",
+        "Responda com SIM para continuar.",
+      ].join("\n\n"),
+    );
+
     this.logger.info(
-      `[interactions-worker] processed lead-response.created id=${event.leadResponse.id} leadId=${event.leadResponse.leadId}`,
+      `[users-worker] processed user.created for ${event.user.email} (${event.user.id})`,
     );
   }
 }
@@ -48,14 +60,14 @@ class EventProcessingSemaphore {
     private readonly lockTimeoutSeconds: number,
   ) {}
 
-  async claim(event: LeadResponseCreatedEvent): Promise<ClaimResult> {
+  async claim(event: UserCreatedEvent): Promise<ClaimResult> {
     try {
       await prisma.eventProcessing.create({
         data: {
           consumer: this.consumer,
           eventId: event.eventId,
           eventType: event.type,
-          aggregateId: event.leadResponse.leadId,
+          aggregateId: event.user.id,
           status: EventProcessingStatus.PROCESSING,
           attempts: 1,
           error: null,
@@ -123,7 +135,7 @@ class EventProcessingSemaphore {
       : { kind: "already-processing" };
   }
 
-  async complete(event: LeadResponseCreatedEvent): Promise<void> {
+  async complete(event: UserCreatedEvent): Promise<void> {
     await prisma.eventProcessing.updateMany({
       where: {
         consumer: this.consumer,
@@ -137,7 +149,7 @@ class EventProcessingSemaphore {
     });
   }
 
-  async fail(event: LeadResponseCreatedEvent, error: unknown): Promise<void> {
+  async fail(event: UserCreatedEvent, error: unknown): Promise<void> {
     await prisma.eventProcessing.updateMany({
       where: {
         consumer: this.consumer,
@@ -167,14 +179,14 @@ class EventProcessingSemaphore {
   }
 }
 
-class SqsInteractionsEventsConsumer {
+class SqsUsersEventsConsumer {
   private readonly client: SQSClient;
   private shouldStop = false;
 
   constructor(
     private readonly queueUrl: string,
     region: string,
-    private readonly handler: LeadResponseCreatedHandler,
+    private readonly handler: UserCreatedHandler,
     private readonly semaphore: EventProcessingSemaphore,
     private readonly logger: Logger,
     private readonly options: ConsumerOptions,
@@ -183,7 +195,7 @@ class SqsInteractionsEventsConsumer {
   }
 
   async start(): Promise<void> {
-    this.logger.info(`[interactions-worker] polling ${this.queueUrl}`);
+    this.logger.info(`[users-worker] polling ${this.queueUrl}`);
 
     while (!this.shouldStop) {
       const messages = await this.receiveMessages();
@@ -202,7 +214,7 @@ class SqsInteractionsEventsConsumer {
       }
     }
 
-    this.logger.info("[interactions-worker] stopped");
+    this.logger.info("[users-worker] stopped");
   }
 
   stop(): void {
@@ -228,23 +240,21 @@ class SqsInteractionsEventsConsumer {
     const receiptHandle = message.ReceiptHandle;
 
     if (!receiptHandle) {
-      this.logger.warn(
-        "[interactions-worker] skipping message without receipt handle",
-      );
+      this.logger.warn("[users-worker] skipping message without receipt handle");
       return;
     }
 
-    let event: LeadResponseCreatedEvent | null = null;
+    let event: UserCreatedEvent | null = null;
 
     try {
       const parsedBody = JSON.parse(message.Body ?? "");
-      event = leadResponseCreatedEventSchema.parse(parsedBody);
+      event = userCreatedEventSchema.parse(parsedBody);
 
       const claim = await this.semaphore.claim(event);
 
       if (claim.kind === "duplicate-completed") {
         this.logger.info(
-          `[interactions-worker] duplicate event ${event.eventId} already completed, deleting message`,
+          `[users-worker] duplicate event ${event.eventId} already completed, deleting message`,
         );
         await this.deleteMessage(receiptHandle);
         return;
@@ -252,7 +262,7 @@ class SqsInteractionsEventsConsumer {
 
       if (claim.kind === "already-processing") {
         this.logger.info(
-          `[interactions-worker] event ${event.eventId} is already being processed, keeping message in queue`,
+          `[users-worker] event ${event.eventId} is already being processed, keeping message in queue`,
         );
         return;
       }
@@ -262,17 +272,13 @@ class SqsInteractionsEventsConsumer {
       await this.deleteMessage(receiptHandle);
     } catch (error) {
       if (error instanceof SyntaxError) {
-        this.logger.error(
-          "[interactions-worker] invalid JSON payload, deleting message",
-        );
+        this.logger.error("[users-worker] invalid JSON payload, deleting message");
         await this.deleteMessage(receiptHandle);
         return;
       }
 
       if (error instanceof Error && error.name === "ZodError") {
-        this.logger.error(
-          "[interactions-worker] invalid event contract, deleting message",
-        );
+        this.logger.error("[users-worker] invalid event contract, deleting message");
         await this.deleteMessage(receiptHandle);
         return;
       }
@@ -281,9 +287,7 @@ class SqsInteractionsEventsConsumer {
         await this.semaphore.fail(event, error);
       }
 
-      this.logger.error(
-        "[interactions-worker] handler failed, message will return to queue",
-      );
+      this.logger.error("[users-worker] handler failed, message will return to queue");
       this.logger.error(error);
     }
   }
@@ -300,24 +304,38 @@ class SqsInteractionsEventsConsumer {
   private sleep(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
+
+  private tryParseEvent(body?: string): UserCreatedEvent | null {
+    if (!body) {
+      return null;
+    }
+
+    try {
+      const json = JSON.parse(body);
+      const parsed = userCreatedEventSchema.safeParse(json);
+      return parsed.success ? parsed.data : null;
+    } catch {
+      return null;
+    }
+  }
 }
 
 async function main(): Promise<void> {
-  if (!env.INTERACTIONS_EVENTS_QUEUE_URL || !env.AWS_REGION) {
+  if (!env.LEADS_EVENTS_QUEUE_URL || !env.AWS_REGION) {
     throw new Error(
-      "INTERACTIONS_EVENTS_QUEUE_URL and AWS_REGION must be configured to run the worker",
+      "LEADS_EVENTS_QUEUE_URL and AWS_REGION must be configured to run the worker",
     );
   }
 
   const logger: Logger = console;
-  const handler = new LeadResponseCreatedHandler(logger);
+  const handler = new UserCreatedHandler(logger);
   const semaphore = new EventProcessingSemaphore(
-    INTERACTIONS_EVENTS_CONSUMER_NAME,
+    USERS_EVENTS_CONSUMER_NAME,
     env.EVENT_PROCESSING_LOCK_TIMEOUT_SECONDS,
   );
 
-  const consumer = new SqsInteractionsEventsConsumer(
-    env.INTERACTIONS_EVENTS_QUEUE_URL,
+  const consumer = new SqsUsersEventsConsumer(
+    env.LEADS_EVENTS_QUEUE_URL,
     env.AWS_REGION,
     handler,
     semaphore,
@@ -332,18 +350,25 @@ async function main(): Promise<void> {
   );
 
   const shutdown = (signal: string) => {
-    logger.info(`[interactions-worker] received ${signal}, shutting down`);
+    logger.info(`[users-worker] received ${signal}, shutting down`);
     consumer.stop();
   };
 
-  process.on("SIGINT", () => shutdown("SIGINT"));
-  process.on("SIGTERM", () => shutdown("SIGTERM"));
+  process.on("SIGINT", () => {
+    shutdown("SIGINT");
+  });
+
+  process.on("SIGTERM", () => {
+    shutdown("SIGTERM");
+  });
 
   await consumer.start();
+  await prisma.$disconnect();
 }
 
-main().catch((error) => {
-  console.error("[interactions-worker] fatal error");
+main().catch(async (error) => {
+  console.error("[users-worker] fatal error");
   console.error(error);
+  await prisma.$disconnect();
   process.exit(1);
 });

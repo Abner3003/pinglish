@@ -12,7 +12,6 @@ import { kycUserRoutes } from "./modules/kyc-users/kyc-users.routes.js";
 import { kycProfessionalRoutes } from "./modules/kyc-professionals/kyc-professionals.routes.js";
 import { userChannelRoutes } from "./modules/user-channels/user-channels.routes.js";
 import { onboardingRoutes } from "./modules/onboarding/onboarding.routes.js";
-import { TwilioRoutes } from "./modules/twilio/twilio.routes.js";
 import { metaWhatsAppRoutes } from "./modules/meta-whatsapp/meta-whatsapp.routes.js";
 import { leagueRoutes } from "./modules/leagues/leagues.routes.js";
 import { userJourneyRoutes } from "./modules/user-journeys/user-journeys.routes.js";
@@ -52,7 +51,6 @@ export function buildApp(){
   app.register(kycProfessionalRoutes, {prefix:"/kyc-professionals"});
   app.register(userChannelRoutes, {prefix:"/user-channels"});
   app.register(onboardingRoutes);
-  app.register(TwilioRoutes);
   app.register(metaWhatsAppRoutes);
   app.register(leagueRoutes, {prefix:"/leagues"});
   app.register(userJourneyRoutes, {prefix:"/user-journeys"});

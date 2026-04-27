@@ -1,6 +1,7 @@
 import {
   LearningGoal,
   UserChannelStatus,
+  Prisma,
 } from "../../generated/prisma/index.js";
 import { prisma } from "../../lib/prisma.js";
 import { env } from "../../config/env.js";
@@ -32,9 +33,59 @@ function getString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
+function getOptionalString(value: unknown): string | null | undefined {
+  if (value === null) {
+    return null;
+  }
+
+  return typeof value === "string" ? value : undefined;
+}
+
 function normalizePhoneNumber(phone: string): string {
   return phone.replace(/[^\d]/g, "");
 }
+
+async function fetchJson(
+  url: string,
+  init: RequestInit,
+): Promise<{ ok: boolean; status: number; body: unknown; rawBody: string }> {
+  const response = await fetch(url, init);
+  const rawBody = await response.text();
+
+  try {
+    return {
+      ok: response.ok,
+      status: response.status,
+      body: rawBody ? JSON.parse(rawBody) : null,
+      rawBody,
+    };
+  } catch {
+    return {
+      ok: response.ok,
+      status: response.status,
+      body: rawBody,
+      rawBody,
+    };
+  }
+}
+
+type WhatsAppIntegrationRecord = {
+  id: string;
+  status: string;
+  appId: string | null;
+  verifyToken: string | null;
+  accessToken: string | null;
+  businessAccountId: string | null;
+  wabaId: string | null;
+  phoneNumberId: string | null;
+  displayPhoneNumber: string | null;
+  callbackCode: string | null;
+  callbackState: string | null;
+  metadata: unknown | null;
+  connectedAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+};
 
 function normalizeText(value: string): string {
   return value
@@ -221,6 +272,174 @@ function buildReaskMessage(): string {
 export class MetaWhatsAppService {
   constructor(private readonly logger: Logger = console) {}
 
+  async getActiveIntegration(): Promise<WhatsAppIntegrationRecord | null> {
+    return prisma.whatsAppIntegration.findFirst({
+      orderBy: {
+        updatedAt: "desc",
+      },
+    });
+  }
+
+  async saveEmbeddedSignup(input: {
+    code?: string | null;
+    state?: string | null;
+    appId?: string | null;
+    accessToken?: string | null;
+    businessAccountId?: string | null;
+    wabaId?: string | null;
+    phoneNumberId?: string | null;
+    displayPhoneNumber?: string | null;
+    verifyToken?: string | null;
+    metadata?: unknown;
+  }): Promise<WhatsAppIntegrationRecord> {
+    const existing = await this.getActiveIntegration();
+    const metadataValue =
+      input.metadata !== undefined
+        ? (input.metadata as Prisma.InputJsonValue)
+        : existing?.metadata !== null && existing?.metadata !== undefined
+          ? (existing.metadata as Prisma.InputJsonValue)
+          : undefined;
+
+    const data = {
+      status: "ACTIVE" as const,
+      appId: input.appId ?? env.META_WHATSAPP_APP_ID ?? existing?.appId ?? null,
+      verifyToken:
+        input.verifyToken ?? env.META_WHATSAPP_VERIFY_TOKEN ?? existing?.verifyToken ?? null,
+      accessToken: input.accessToken ?? existing?.accessToken ?? null,
+      businessAccountId: input.businessAccountId ?? existing?.businessAccountId ?? null,
+      wabaId: input.wabaId ?? existing?.wabaId ?? null,
+      phoneNumberId: input.phoneNumberId ?? existing?.phoneNumberId ?? null,
+      displayPhoneNumber: input.displayPhoneNumber ?? existing?.displayPhoneNumber ?? null,
+      callbackCode: input.code ?? existing?.callbackCode ?? null,
+      callbackState: input.state ?? existing?.callbackState ?? null,
+      ...(metadataValue !== undefined ? { metadata: metadataValue } : {}),
+      connectedAt: existing?.connectedAt ?? new Date(),
+    };
+
+    if (existing) {
+      return prisma.whatsAppIntegration.update({
+        where: {
+          id: existing.id,
+        },
+        data,
+      });
+    }
+
+    return prisma.whatsAppIntegration.create({
+      data,
+    });
+  }
+
+  async exchangeEmbeddedSignupCode(input: {
+    code: string;
+  }): Promise<{ accessToken: string | null; raw: unknown }> {
+    if (!env.META_WHATSAPP_APP_ID || !env.META_WHATSAPP_APP_SECRET) {
+      throw new Error("META_WHATSAPP_APP_ID and META_WHATSAPP_APP_SECRET must be configured");
+    }
+
+    const url = new URL("https://graph.facebook.com/oauth/access_token");
+    url.searchParams.set("client_id", env.META_WHATSAPP_APP_ID);
+    url.searchParams.set("client_secret", env.META_WHATSAPP_APP_SECRET);
+    url.searchParams.set("code", input.code);
+
+    const response = await fetchJson(url.toString(), {
+      method: "GET",
+    });
+
+    if (!response.ok) {
+      throw new Error(
+        `Meta embedded signup token exchange failed with status ${response.status}: ${response.rawBody}`,
+      );
+    }
+
+    const accessToken = isRecord(response.body) ? getString(response.body.access_token) ?? null : null;
+
+    return {
+      accessToken,
+      raw: response.body,
+    };
+  }
+
+  async connectNumber(input: {
+    wabaId?: string | null;
+    phoneNumberId?: string | null;
+    accessToken?: string | null;
+    pin?: string | null;
+  }): Promise<{ ok: boolean; raw: unknown }> {
+    const integration = await this.getActiveIntegration();
+    const wabaId = input.wabaId ?? integration?.wabaId ?? null;
+    const phoneNumberId = input.phoneNumberId ?? integration?.phoneNumberId ?? null;
+    const accessToken = input.accessToken ?? integration?.accessToken ?? env.WHATSAPP_TOKEN ?? null;
+
+    if (!wabaId || !accessToken) {
+      throw new Error("wabaId and accessToken are required to connect the WhatsApp number");
+    }
+
+    const subscribeResponse = await fetchJson(
+      `https://graph.facebook.com/${env.GRAPH_API_VERSION}/${encodeURIComponent(wabaId)}/subscribed_apps`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+      },
+    );
+
+    if (!subscribeResponse.ok) {
+      throw new Error(
+        `Meta subscribed_apps call failed with status ${subscribeResponse.status}: ${subscribeResponse.rawBody}`,
+      );
+    }
+
+    let registerResponse: { ok: boolean; status: number; body: unknown; rawBody: string } | null = null;
+
+    if (phoneNumberId && input.pin) {
+      registerResponse = await fetchJson(
+        `https://graph.facebook.com/${env.GRAPH_API_VERSION}/${encodeURIComponent(phoneNumberId)}/register`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${accessToken}`,
+          },
+          body: JSON.stringify({
+            messaging_product: "whatsapp",
+            pin: input.pin,
+          }),
+        },
+      );
+
+      if (!registerResponse.ok) {
+        throw new Error(
+          `Meta phone register call failed with status ${registerResponse.status}: ${registerResponse.rawBody}`,
+        );
+      }
+    }
+
+    if (integration) {
+      await prisma.whatsAppIntegration.update({
+        where: {
+          id: integration.id,
+        },
+        data: {
+          status: "ACTIVE",
+          wabaId,
+          phoneNumberId: phoneNumberId ?? integration.phoneNumberId,
+          accessToken,
+          connectedAt: new Date(),
+        },
+      });
+    }
+
+    return {
+      ok: true,
+      raw: {
+        subscribed_apps: subscribeResponse.body,
+        register: registerResponse?.body ?? null,
+      },
+    };
+  }
+
   async handleWebhook(payload: unknown): Promise<void> {
     const inboundMessages = this.extractInboundMessages(payload);
 
@@ -241,16 +460,20 @@ export class MetaWhatsAppService {
   }
 
   async sendWhatsAppMessage(to: string, text: string): Promise<string | null> {
-    if (!env.WHATSAPP_TOKEN || !env.PHONE_NUMBER_ID) {
+    const integration = await this.getActiveIntegration();
+    const token = env.WHATSAPP_TOKEN ?? integration?.accessToken ?? null;
+    const phoneNumberId = env.PHONE_NUMBER_ID ?? integration?.phoneNumberId ?? null;
+
+    if (!token || !phoneNumberId) {
       throw new Error("Meta WhatsApp is not configured");
     }
 
     const response = await fetch(
-      `https://graph.facebook.com/${env.GRAPH_API_VERSION}/${env.PHONE_NUMBER_ID}/messages`,
+      `https://graph.facebook.com/${env.GRAPH_API_VERSION}/${phoneNumberId}/messages`,
       {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${env.WHATSAPP_TOKEN}`,
+          Authorization: `Bearer ${token}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify({

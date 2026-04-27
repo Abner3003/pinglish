@@ -3,6 +3,10 @@ import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import { z } from "zod";
 import { prisma } from "../../lib/prisma.js";
 import { phoneSchema } from "../shared/phone.js";
+import { buildOnboardingEventsPublisher } from "../../lib/onboarding-events.publisher.js";
+import { getUserCreatedEventId } from "./onboarding.events.js";
+
+const onboardingEventsPublisher = buildOnboardingEventsPublisher();
 
 const onboardingBodySchema = z.object({
   phone: phoneSchema,
@@ -217,6 +221,25 @@ export const onboardingRoutes: FastifyPluginAsync = async (app) => {
         });
 
         return { user, userChannel };
+      });
+
+      await onboardingEventsPublisher.publishUserCreated({
+        eventId: getUserCreatedEventId(result.user.id),
+        type: "user.created",
+        occurredAt: new Date().toISOString(),
+        user: {
+          id: result.user.id,
+          name: result.user.name,
+          email: result.user.email,
+          phone: result.user.phone,
+          planId: result.user.planId,
+        },
+        userChannel: {
+          id: result.userChannel.id,
+          userId: result.userChannel.userId,
+          status: result.userChannel.status,
+          onboardingStep: result.userChannel.onboardingStep,
+        },
       });
 
       return reply.code(201).send({
