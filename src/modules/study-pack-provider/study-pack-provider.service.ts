@@ -514,11 +514,26 @@ function shouldRetryStatus(status: number): boolean {
   return status >= 500 || status === 429;
 }
 
+function getPayloadSizeBytes(payload: unknown): number | null {
+  try {
+    return Buffer.byteLength(JSON.stringify(payload), "utf8");
+  } catch {
+    return null;
+  }
+}
+
 function logRemoteStudyCall(
   step: "mountPack" | "getPackById" | "analyzeReviewResponse",
   details: Record<string, unknown>,
 ): void {
   console.info({ scope: "study-pack-provider", step, ...details }, "[penglish-ai] request");
+}
+
+function logRemoteStudyResponse(
+  step: "mountPack" | "getPackById" | "analyzeReviewResponse",
+  details: Record<string, unknown>,
+): void {
+  console.info({ scope: "study-pack-provider", step, ...details }, "[penglish-ai] response");
 }
 
 export class StudyPackProviderService {
@@ -578,14 +593,17 @@ export class StudyPackProviderService {
 
         const url = buildUrl(env.STUDY_PACK_SERVICE_BASE_URL, path);
         const payload = this.buildLessonGenerationPayload(input);
+        const startedAt = Date.now();
 
         logRemoteStudyCall("mountPack", {
           url,
+          path,
           userId: input.userId,
           session_id: input.session_id,
           mode: input.mode,
           topic: input.topic,
           level: input.level,
+          payloadSizeBytes: getPayloadSizeBytes(payload),
         });
 
         const response = await retryRemoteCall(async () => {
@@ -609,40 +627,35 @@ export class StudyPackProviderService {
 
         if (response.ok) {
           const remotePackId = extractPackId(response.body);
+          const studies = extractStudies(response.body);
 
-          console.info(
-            {
-              scope: "study-pack-provider",
-              step: "mountPack",
-              ok: true,
-              remotePackId: remotePackId ?? null,
-              userId: input.userId,
-              session_id: input.session_id,
-            },
-            "[penglish-ai] response",
-          );
+          logRemoteStudyResponse("mountPack", {
+            ok: true,
+            status: response.status,
+            durationMs: Date.now() - startedAt,
+            remotePackId: remotePackId ?? null,
+            studiesCount: studies.length,
+            userId: input.userId,
+            session_id: input.session_id,
+          });
 
           if (remotePackId) {
             return {
               remotePackId,
               targetXp: extractTargetXp(response.body),
-              studies: extractStudies(response.body),
+              studies,
               raw: response.body,
             };
           }
         }
 
-        console.warn(
-          {
-            scope: "study-pack-provider",
-            step: "mountPack",
-            ok: false,
-            status: response.status,
-            userId: input.userId,
-            session_id: input.session_id,
-          },
-          "[penglish-ai] response",
-        );
+        logRemoteStudyResponse("mountPack", {
+          ok: false,
+          status: response.status,
+          durationMs: Date.now() - startedAt,
+          userId: input.userId,
+          session_id: input.session_id,
+        });
 
         if (response.status !== 404) {
           continue;
@@ -686,9 +699,11 @@ export class StudyPackProviderService {
               baseUrl,
               `${path.replace(/\/$/, "")}/${encodeURIComponent(packId)}`,
             );
+        const startedAt = Date.now();
 
         logRemoteStudyCall("getPackById", {
           url: resolvedUrl,
+          path,
           packId,
         });
 
@@ -727,16 +742,13 @@ export class StudyPackProviderService {
         if (response.ok) {
           const studies = extractStudies(response.body);
 
-          console.info(
-            {
-              scope: "study-pack-provider",
-              step: "getPackById",
-              ok: true,
-              packId,
-              studiesCount: studies.length,
-            },
-            "[penglish-ai] response",
-          );
+          logRemoteStudyResponse("getPackById", {
+            ok: true,
+            status: response.status,
+            durationMs: Date.now() - startedAt,
+            packId,
+            studiesCount: studies.length,
+          });
 
           return {
             remotePackId: packId,
@@ -764,6 +776,7 @@ export class StudyPackProviderService {
         env.STUDY_PACK_SERVICE_ANALYZE_PATH,
       );
       const payload = input;
+      const startedAt = Date.now();
 
       logRemoteStudyCall("analyzeReviewResponse", {
         url,
@@ -771,6 +784,7 @@ export class StudyPackProviderService {
         packageId: input.packageId,
         packItemId: input.packItemId,
         mode: input.mode,
+        payloadSizeBytes: getPayloadSizeBytes(payload),
       });
 
       const response = await retryRemoteCall(async () => {
@@ -795,17 +809,14 @@ export class StudyPackProviderService {
       const analysisData = extractAnalysisData(response.body);
 
       if (response.ok && analysisData) {
-        console.info(
-          {
-            scope: "study-pack-provider",
-            step: "analyzeReviewResponse",
-            ok: true,
-            userId: input.userId,
-            packageId: input.packageId,
-            packItemId: input.packItemId,
-          },
-          "[penglish-ai] response",
-        );
+        logRemoteStudyResponse("analyzeReviewResponse", {
+          ok: true,
+          status: response.status,
+          durationMs: Date.now() - startedAt,
+          userId: input.userId,
+          packageId: input.packageId,
+          packItemId: input.packItemId,
+        });
 
         return {
           ok: true,
@@ -814,18 +825,14 @@ export class StudyPackProviderService {
         };
       }
 
-      console.warn(
-        {
-          scope: "study-pack-provider",
-          step: "analyzeReviewResponse",
-          ok: false,
-          status: response.status,
-          userId: input.userId,
-          packageId: input.packageId,
-          packItemId: input.packItemId,
-        },
-        "[penglish-ai] response",
-      );
+      logRemoteStudyResponse("analyzeReviewResponse", {
+        ok: false,
+        status: response.status,
+        durationMs: Date.now() - startedAt,
+        userId: input.userId,
+        packageId: input.packageId,
+        packItemId: input.packItemId,
+      });
     } catch (error) {
       console.warn("[study-pack-provider] analyzeReviewResponse failed", error);
     }

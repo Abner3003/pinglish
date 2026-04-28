@@ -23,6 +23,7 @@ type UserTenantLogContext = {
   userPhone: string;
   userName: string | null;
   email: string | null;
+  onboardingStep: number | null;
   tenantId: string | null;
   tenant: {
     id: string;
@@ -286,6 +287,11 @@ export class MetaWhatsAppService {
         name: true,
         email: true,
         phone: true,
+        userChannel: {
+          select: {
+            onboardingStep: true,
+          },
+        },
         learningProfile: {
           select: {
             tenantId: true,
@@ -302,13 +308,32 @@ export class MetaWhatsAppService {
       },
     });
 
+    const defaultTenantId = await resolveDefaultTenantId();
+    const tenantId = user?.learningProfile?.tenantId ?? defaultTenantId ?? null;
+    const tenant =
+      user?.learningProfile?.tenant ??
+      (tenantId
+        ? await prisma.tenant.findUnique({
+            where: {
+              id: tenantId,
+            },
+            select: {
+              id: true,
+              name: true,
+              segment: true,
+              description: true,
+            },
+          })
+        : null);
+
     return {
       userId: user?.id ?? null,
       userPhone: phone,
       userName: user?.name ?? null,
       email: user?.email ?? null,
-      tenantId: user?.learningProfile?.tenantId ?? null,
-      tenant: user?.learningProfile?.tenant ?? null,
+      onboardingStep: user?.userChannel?.onboardingStep ?? null,
+      tenantId,
+      tenant,
     };
   }
 
@@ -876,6 +901,16 @@ export class MetaWhatsAppService {
           },
         });
 
+        await this.sendReply(
+          user.phone,
+          [
+            "Tudo certo por aqui ✅",
+            "Seu cadastro foi concluído e agora estou preparando sua primeira atividade.",
+            "Já vou continuar com seu estudo por aqui.",
+          ].join("\n\n"),
+          message.messageId,
+        );
+
         const studySession = await studyOrchestratorService.startDailyStudySession(user.id, {
           forceRegenerate: true,
         });
@@ -886,7 +921,7 @@ export class MetaWhatsAppService {
           );
           await this.sendReply(
             user.phone,
-            "Seu cadastro foi concluído, mas ainda não tenho um estudo pronto para você. Assim que ficar disponível, eu sigo daqui.",
+            "Seu cadastro foi concluído, mas ainda estou preparando sua próxima atividade. Assim que ela ficar pronta, eu sigo daqui.",
             message.messageId,
           );
           return;
@@ -895,7 +930,7 @@ export class MetaWhatsAppService {
         if (!studySession.replyText) {
           await this.sendReply(
             user.phone,
-            "Seu cadastro foi concluído, mas ainda estou preparando sua próxima atividade.",
+            "Seu cadastro foi concluído, mas ainda estou montando a primeira atividade para você.",
             message.messageId,
           );
           return;
