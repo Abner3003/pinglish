@@ -192,16 +192,21 @@ function buildOnboardingQuestion(step: 2 | 3 | 4 | 5 | 6): string {
   }
 }
 
-function buildWelcomeMessage(): string {
+export function buildWelcomeMessage(): string {
   return [
     "Olá! Seja bem-vindo ao Penglish 🎉",
-    "Qual é o seu nome?",
-  ].join("\n");
+    "Vou te acompanhar nessa jornada para aprender inglês de forma prática.",
+    "Agora vamos começar rapidinho.",
+  ].join("\n\n");
+}
+
+function buildNameQuestion(): string {
+  return "Para começarmos, me diga seu nome.";
 }
 
 function buildReaskMessage(step: 1 | 2 | 3 | 4 | 5 | 6): string {
   if (step === 1) {
-    return buildWelcomeMessage();
+    return buildNameQuestion();
   }
 
   return [

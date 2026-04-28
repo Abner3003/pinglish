@@ -13,6 +13,7 @@ import { env } from "../config/env.js";
 import { prisma } from "../lib/prisma.js";
 import { logWhatsAppRuntimeConfig } from "../lib/runtime-diagnostics.js";
 import { metaWhatsAppService } from "../modules/meta-whatsapp/meta-whatsapp.module.js";
+import { buildWelcomeMessage } from "../modules/meta-whatsapp/meta-whatsapp.service.js";
 import {
   userCreatedEventSchema,
   type UserCreatedEvent,
@@ -55,10 +56,7 @@ class UserCreatedHandler {
 
     await metaWhatsAppService.sendWhatsAppMessage(
       event.user.phone,
-      [
-        "Olá! Seja bem-vindo ao Penglish 🎉",
-        "Qual é o seu nome?",
-      ].join("\n\n"),
+      buildWelcomeMessage(),
     );
 
     this.logger.info(
