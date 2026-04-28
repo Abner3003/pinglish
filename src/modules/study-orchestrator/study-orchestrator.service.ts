@@ -307,19 +307,11 @@ export class StudyOrchestratorService {
       currentStudyItem,
       analysisRequest: currentStudyItem && pack
         ? {
-            schema_version: "v1",
-            task_type: "review",
-            user_id: userId,
             userId,
             packageId: pack.id,
             packItemId: currentStudyItem.itemId,
+            userResponse: "",
             mode: "teach",
-            session_id: pack.id,
-            lesson_goal: "translation",
-            difficulty: "easy",
-            topic: currentStudyItem.topicKey ?? currentStudyItem.itemId,
-            language: "pt-BR",
-            user_answer: "",
           }
         : null,
     };

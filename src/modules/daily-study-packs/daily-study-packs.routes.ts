@@ -89,25 +89,11 @@ const currentStudyContextResponseSchema = z.object({
     .nullable(),
   analysisRequest: z
     .object({
-      schema_version: z.literal("v1"),
-      task_type: z.literal("review"),
-      user_id: z.string().min(1),
       userId: z.string().min(1),
       packageId: z.string().min(1),
       packItemId: z.string().min(1),
-      mode: z.enum(["teach", "drill", "remediate"]),
-      session_id: z.string().min(1),
-      lesson_goal: z.string().min(1),
-      difficulty: z.string().min(1),
-      topic: z.string().min(1),
-      language: z.string().min(1),
-      user_answer: z.string(),
-      context: z
-        .object({
-          history_summary: z.string().optional(),
-          last_error: z.string().optional(),
-        })
-        .optional(),
+      userResponse: z.string(),
+      mode: z.enum(["teach", "drill", "remediate"]).optional(),
     })
     .nullable(),
 });

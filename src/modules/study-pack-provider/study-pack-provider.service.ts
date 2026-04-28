@@ -75,20 +75,11 @@ export type ReviewRequestInput = {
 };
 
 export type ReviewRequestPayload = {
-  schema_version: "v1";
-  task_type: "review";
-  mode: "teach" | "drill" | "remediate";
-  user_id: string;
-  session_id: string;
-  lesson_goal: string;
-  difficulty: string;
-  topic: string;
-  language: string;
-  user_answer: string;
-  context?: Record<string, unknown>;
   userId: string;
   packageId: string;
   packItemId: string;
+  userResponse: string;
+  mode?: "teach" | "drill" | "remediate";
 };
 
 type JsonRecord = Record<string, unknown>;
@@ -371,7 +362,7 @@ async function buildFallbackAnalysis(input: ReviewRequestPayload): Promise<Revie
 
   const expectedAnswer = study?.text ?? item?.text ?? item?.meaning ?? "";
   const classifierResult = learningResponseClassifier.classify({
-    userText: input.user_answer,
+    userText: input.userResponse,
     expectedText: expectedAnswer,
     itemType: (item?.type as "LEXICAL_CHUNK" | "PATTERN" | "EXAMPLE" | "MICRO_LESSON" | undefined) ?? "EXAMPLE",
   });
@@ -406,7 +397,7 @@ async function buildFallbackAnalysis(input: ReviewRequestPayload): Promise<Revie
   return {
     schema_version: "v1",
     response_type: "review_result",
-    mode: input.mode,
+    mode: input.mode ?? "teach",
     userId: input.userId,
     packageId: input.packageId,
     packItemId: input.packItemId,
@@ -539,16 +530,10 @@ function logRemoteStudyResponse(
 export class StudyPackProviderService {
   buildLessonGenerationPayload(input: RemoteStudyPackInput): Record<string, unknown> {
     return {
-      schema_version: "v1",
-      task_type: "lesson",
-      mode: input.mode ?? "teach",
-      user_id: input.userId,
-      session_id: input.session_id,
-      lesson_goal: input.lesson_goal,
-      difficulty: input.difficulty,
-      topic: input.topic,
-      language: input.language,
-      context: input.context ?? undefined,
+      userId: input.userId,
+      tenantId: input.tenantId ?? null,
+      level: input.level,
+      interests: input.interests,
     };
   }
 
@@ -556,20 +541,10 @@ export class StudyPackProviderService {
     input: ReviewRequestInput,
   ): ReviewRequestPayload {
     return {
-      schema_version: "v1",
-      task_type: "review",
-      user_id: input.userId,
-      session_id: input.session_id,
-      lesson_goal: input.lesson_goal,
-      difficulty: input.difficulty,
-      topic: input.topic,
-      language: input.language,
-      user_answer: input.user_answer,
-      context: input.context,
       userId: input.userId,
       packageId: input.packageId,
       packItemId: input.packItemId,
-      mode: input.mode,
+      userResponse: input.user_answer,
     };
   }
 
@@ -581,9 +556,7 @@ export class StudyPackProviderService {
     try {
       const candidatePaths = [
         env.STUDY_PACK_SERVICE_MOUNT_PATH,
-        "/packs/mountPack",
         "/mountPack",
-        "/moutPack",
       ].filter((path): path is string => Boolean(path));
 
       for (const path of candidatePaths) {
@@ -678,14 +651,8 @@ export class StudyPackProviderService {
     try {
       const candidatePaths = [
         env.STUDY_PACK_SERVICE_GET_PACK_PATH,
-        "/packs/getPackById",
-        "/getPackbyId",
         "/getPackById",
-        "/packs/getPackbyId",
         `/getPackById/${encodeURIComponent(packId)}`,
-        `/getPackbyId/${encodeURIComponent(packId)}`,
-        `/packs/getPackById/${encodeURIComponent(packId)}`,
-        `/packs/getPackbyId/${encodeURIComponent(packId)}`,
       ].filter((path): path is string => Boolean(path));
 
       for (const path of candidatePaths) {
@@ -783,7 +750,7 @@ export class StudyPackProviderService {
         userId: input.userId,
         packageId: input.packageId,
         packItemId: input.packItemId,
-        mode: input.mode,
+        mode: input.mode ?? "teach",
         payloadSizeBytes: getPayloadSizeBytes(payload),
       });
 
