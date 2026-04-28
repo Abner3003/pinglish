@@ -18,6 +18,20 @@ type InboundMessage = {
   messageId: string | null;
 };
 
+type UserTenantLogContext = {
+  userId: string | null;
+  userPhone: string;
+  userName: string | null;
+  email: string | null;
+  tenantId: string | null;
+  tenant: {
+    id: string;
+    name: string;
+    segment: string;
+    description: string;
+  } | null;
+};
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -25,8 +39,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function getString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
-
-
 
 function normalizePhoneNumber(phone: string): string {
   return phone.replace(/[^\d]/g, "");
@@ -262,6 +274,59 @@ export class MetaWhatsAppService {
         `Meta WhatsApp typing indicator failed with status ${response.status}: ${rawBody}`,
       );
     }
+  }
+
+  private async resolveUserTenantLogContextByPhone(phone: string): Promise<UserTenantLogContext> {
+    const user = await prisma.user.findUnique({
+      where: {
+        phone,
+      },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        phone: true,
+        learningProfile: {
+          select: {
+            tenantId: true,
+            tenant: {
+              select: {
+                id: true,
+                name: true,
+                segment: true,
+                description: true,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    return {
+      userId: user?.id ?? null,
+      userPhone: phone,
+      userName: user?.name ?? null,
+      email: user?.email ?? null,
+      tenantId: user?.learningProfile?.tenantId ?? null,
+      tenant: user?.learningProfile?.tenant ?? null,
+    };
+  }
+
+  private async logUserTenantContext(
+    direction: "inbound" | "outbound",
+    phone: string,
+    extra?: Record<string, unknown>,
+  ): Promise<void> {
+    const context = await this.resolveUserTenantLogContextByPhone(phone);
+
+    this.logger.info(
+      {
+        direction,
+        ...context,
+        ...(extra ?? {}),
+      },
+      "[meta-whatsapp] user tenant context",
+    );
   }
 
   private async upsertPartialKycUser(input: {
@@ -521,6 +586,10 @@ export class MetaWhatsAppService {
       throw new Error("Meta WhatsApp is not configured");
     }
 
+    await this.logUserTenantContext("outbound", normalizePhoneNumber(to), {
+      messageLength: text.length,
+    });
+
     const response = await fetch(
       `https://graph.facebook.com/${env.GRAPH_API_VERSION}/${phoneNumberId}/messages`,
       {
@@ -611,6 +680,11 @@ export class MetaWhatsAppService {
           email: true,
         },
       }));
+
+    await this.logUserTenantContext("inbound", phone, {
+      messageLength: text.length,
+      messageId: message.messageId,
+    });
 
     const channel = await prisma.userChannel.upsert({
       where: {
