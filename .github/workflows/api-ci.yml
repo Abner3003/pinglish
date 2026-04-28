@@ -273,14 +273,14 @@ jobs:
               --restart always \
               --env-file /opt/pinglish/.env \
               \$IMAGE_URI \
-              node dist/jobs/leads-events.consumer.js
+              node dist/jobs/users-events.consumer.js
 
             docker run -d \
               --name pinglish-worker-interactions \
               --restart always \
               --env-file /opt/pinglish/.env \
               \$IMAGE_URI \
-              node dist/jobs/interactions-events.consumer.js
+              node dist/jobs/users-events.consumer.js
 
             docker container prune -f
             docker image prune -af
