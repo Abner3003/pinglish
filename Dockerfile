@@ -14,6 +14,7 @@ COPY prisma.config.ts ./
 
 RUN npx prisma generate
 RUN npm run build
+RUN npm prune --omit=dev
 
 FROM node:20-slim AS runner
 
@@ -24,7 +25,7 @@ ENV NODE_ENV=production
 RUN apt-get update && apt-get install -y openssl && rm -rf /var/lib/apt/lists/*
 
 COPY package*.json ./
-RUN npm ci --omit=dev
+COPY --from=builder /app/node_modules ./node_modules
 
 COPY --from=builder /app/prisma ./prisma
 COPY --from=builder /app/prisma.config.ts ./prisma.config.ts
