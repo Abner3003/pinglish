@@ -3,7 +3,7 @@ import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import { z } from "zod";
 import { Prisma } from "../../generated/prisma/index.js";
 import { prisma } from "../../lib/prisma.js";
-import { buildTenantSeedItemData } from "./tenant-seed-items.js";
+import { ensureTenantHasSeedItems } from "./tenant-seed-items.js";
 
 const idParamsSchema = z.object({
   id: z.string().min(1),
@@ -257,17 +257,7 @@ export const tenantRoutes: FastifyPluginAsync = async (app) => {
         },
       });
 
-      const existingItems = await prisma.learningItem.count({
-        where: {
-          tenantId: tenant.id,
-        },
-      });
-
-      if (existingItems === 0) {
-        await prisma.learningItem.createMany({
-          data: buildTenantSeedItemData(tenant.id),
-        });
-      }
+      await ensureTenantHasSeedItems(tenant.id, prisma);
 
       return reply.code(201).send({
         tenant: toTenantRecord(tenant),
@@ -365,25 +355,10 @@ export const tenantRoutes: FastifyPluginAsync = async (app) => {
       },
     },
     async (request) => {
-      const existingItems = await prisma.learningItem.count({
-        where: {
-          tenantId: request.params.id,
-        },
-      });
-
-      if (existingItems > 0) {
-        return {
-          created: 0,
-          skipped: true,
-        };
-      }
-
-      const result = await prisma.learningItem.createMany({
-        data: buildTenantSeedItemData(request.params.id),
-      });
+      const ensured = await ensureTenantHasSeedItems(request.params.id, prisma);
 
       return {
-        created: result.count,
+        created: ensured,
         skipped: false,
       };
     },

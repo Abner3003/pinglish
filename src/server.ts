@@ -4,6 +4,7 @@ import { startJobScheduler } from "./jobs/job-scheduler.js";
 import { prisma } from "./lib/prisma.js";
 import { logWhatsAppRuntimeConfig } from "./lib/runtime-diagnostics.js";
 import { backfillSeedItemsForAllTenants } from "./modules/tenants/tenant-seed-items.js";
+import { resolveDefaultTenantId } from "./modules/tenants/default-tenant.service.js";
 
 const app = buildApp();
 
@@ -12,11 +13,13 @@ app
   .then(async (address) => {
     app.log.info(`Listening on ${address}`);
     logWhatsAppRuntimeConfig(app.log, "api");
+    const defaultTenantId = await resolveDefaultTenantId();
     const backfill = await backfillSeedItemsForAllTenants(prisma);
 
     app.log.info(
       {
         scope: "tenant-seed-backfill",
+        defaultTenantId,
         checked: backfill.checked,
         seeded: backfill.seeded,
       },

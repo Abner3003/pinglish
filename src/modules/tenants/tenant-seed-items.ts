@@ -1,5 +1,21 @@
+import { Prisma, PrismaClient } from "../../generated/prisma/index.js";
+
+type SeedLearningItem = {
+  id: string;
+  tenantId: string;
+  type: "LEXICAL_CHUNK" | "PATTERN" | "EXAMPLE" | "MICRO_LESSON";
+  text: string;
+  meaning: string;
+  difficulty: number;
+  tags: string[];
+  prerequisiteItemIds: string[];
+  relatedItemIds: string[];
+  metadata: Prisma.InputJsonValue;
+};
+
 export const TENANT_SEED_ITEMS = [
   {
+    seedKey: "greetings-how-are-you",
     type: "LEXICAL_CHUNK" as const,
     text: "How are you?",
     meaning: "Como você está?",
@@ -14,6 +30,7 @@ export const TENANT_SEED_ITEMS = [
     },
   },
   {
+    seedKey: "politeness-i-would-like",
     type: "PATTERN" as const,
     text: "I would like to...",
     meaning: "Eu gostaria de...",
@@ -28,6 +45,7 @@ export const TENANT_SEED_ITEMS = [
     },
   },
   {
+    seedKey: "education-book-class",
     type: "EXAMPLE" as const,
     text: "I would like to book a class.",
     meaning: "Eu gostaria de reservar uma aula.",
@@ -42,6 +60,7 @@ export const TENANT_SEED_ITEMS = [
     },
   },
   {
+    seedKey: "grammar-simple-present-routines",
     type: "MICRO_LESSON" as const,
     text: "Simple present for routines",
     meaning: "Presente simples para rotinas",
@@ -58,7 +77,8 @@ export const TENANT_SEED_ITEMS = [
 ];
 
 export function buildTenantSeedItemData(tenantId: string) {
-  return TENANT_SEED_ITEMS.map((item) => ({
+  return TENANT_SEED_ITEMS.map((item): SeedLearningItem => ({
+    id: `seed:${tenantId}:${item.seedKey}`,
     tenantId,
     type: item.type,
     text: item.text,
@@ -67,42 +87,41 @@ export function buildTenantSeedItemData(tenantId: string) {
     tags: item.tags,
     prerequisiteItemIds: item.prerequisiteItemIds,
     relatedItemIds: item.relatedItemIds,
-    metadata: item.metadata,
+    metadata: item.metadata as Prisma.InputJsonValue,
   }));
 }
 
+export type TenantSeedPrisma = {
+  learningItem: {
+    count: (args: { where: { tenantId: string } }) => Promise<number>;
+    upsert: PrismaClient["learningItem"]["upsert"];
+  };
+};
+
 export async function ensureTenantHasSeedItems(
   tenantId: string,
-  prisma: {
-    learningItem: {
-      count: (args: { where: { tenantId: string } }) => Promise<number>;
-      createMany: (args: { data: ReturnType<typeof buildTenantSeedItemData> }) => Promise<unknown>;
-    };
-  },
-): Promise<void> {
-  const existingItems = await prisma.learningItem.count({
-    where: {
-      tenantId,
-    },
-  });
+  prisma: TenantSeedPrisma,
+): Promise<number> {
+  const items = buildTenantSeedItemData(tenantId);
 
-  if (existingItems > 0) {
-    return;
+  for (const item of items) {
+    await prisma.learningItem.upsert({
+      where: {
+        id: item.id,
+      },
+      create: item,
+      update: {} as Record<string, never>,
+    });
   }
 
-  await prisma.learningItem.createMany({
-    data: buildTenantSeedItemData(tenantId),
-  });
+  return items.length;
 }
 
 type TenantSeedBackfillPrisma = {
   tenant: {
     findMany: (args: { select: { id: true } }) => Promise<Array<{ id: string }>>;
   };
-  learningItem: {
-    count: (args: { where: { tenantId: string } }) => Promise<number>;
-    createMany: (args: { data: ReturnType<typeof buildTenantSeedItemData> }) => Promise<unknown>;
-  };
+  learningItem: TenantSeedPrisma["learningItem"];
 };
 
 export async function backfillSeedItemsForAllTenants(
@@ -127,9 +146,15 @@ export async function backfillSeedItemsForAllTenants(
       continue;
     }
 
-    await prisma.learningItem.createMany({
-      data: buildTenantSeedItemData(tenant.id),
-    });
+    for (const item of buildTenantSeedItemData(tenant.id)) {
+      await prisma.learningItem.upsert({
+        where: {
+          id: item.id,
+        },
+        create: item,
+        update: {} as Record<string, never>,
+      });
+    }
 
     seeded += 1;
   }
