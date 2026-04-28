@@ -94,3 +94,48 @@ export async function ensureTenantHasSeedItems(
     data: buildTenantSeedItemData(tenantId),
   });
 }
+
+type TenantSeedBackfillPrisma = {
+  tenant: {
+    findMany: (args: { select: { id: true } }) => Promise<Array<{ id: string }>>;
+  };
+  learningItem: {
+    count: (args: { where: { tenantId: string } }) => Promise<number>;
+    createMany: (args: { data: ReturnType<typeof buildTenantSeedItemData> }) => Promise<unknown>;
+  };
+};
+
+export async function backfillSeedItemsForAllTenants(
+  prisma: TenantSeedBackfillPrisma,
+): Promise<{ checked: number; seeded: number }> {
+  const tenants = await prisma.tenant.findMany({
+    select: {
+      id: true,
+    },
+  });
+
+  let seeded = 0;
+
+  for (const tenant of tenants) {
+    const existingItems = await prisma.learningItem.count({
+      where: {
+        tenantId: tenant.id,
+      },
+    });
+
+    if (existingItems > 0) {
+      continue;
+    }
+
+    await prisma.learningItem.createMany({
+      data: buildTenantSeedItemData(tenant.id),
+    });
+
+    seeded += 1;
+  }
+
+  return {
+    checked: tenants.length,
+    seeded,
+  };
+}
