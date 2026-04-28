@@ -16,11 +16,7 @@ export type RemoteStudyPackInput = {
   difficulty: string;
   topic: string;
   language: string;
-  context?: {
-    concept_seen?: boolean;
-    last_error?: string;
-    history_summary?: string;
-  };
+  context?: Record<string, unknown>;
 };
 
 export type RemoteStudyItem = {
@@ -75,10 +71,7 @@ export type ReviewRequestInput = {
   topic: string;
   language: string;
   user_answer: string;
-  context?: {
-    history_summary?: string;
-    last_error?: string;
-  };
+  context?: Record<string, unknown>;
 };
 
 export type ReviewRequestPayload = {
@@ -92,10 +85,7 @@ export type ReviewRequestPayload = {
   topic: string;
   language: string;
   user_answer: string;
-  context?: {
-    history_summary?: string;
-    last_error?: string;
-  };
+  context?: Record<string, unknown>;
   userId: string;
   packageId: string;
   packItemId: string;

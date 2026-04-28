@@ -198,31 +198,36 @@ function scoreToQuality(score: number): 0 | 1 | 2 | 3 | 4 | 5 {
 }
 
 export class StudyOrchestratorService {
-  async getTodayPackForUser(userId: string): Promise<PackResult | null> {
+  async getTodayPackForUser(
+    userId: string,
+    options?: { forceRegenerate?: boolean },
+  ): Promise<PackResult | null> {
     const today = new Date();
     const startOfDay = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()));
 
-    const existingPack = await prisma.dailyStudyPack.findUnique({
-      where: {
-        userId_date: {
-          userId,
-          date: startOfDay,
+    if (!options?.forceRegenerate) {
+      const existingPack = await prisma.dailyStudyPack.findUnique({
+        where: {
+          userId_date: {
+            userId,
+            date: startOfDay,
+          },
         },
-      },
-      select: {
-        id: true,
-        items: true,
-        targetXp: true,
-      },
-    });
+        select: {
+          id: true,
+          items: true,
+          targetXp: true,
+        },
+      });
 
-    if (existingPack) {
-      const packItems = normalizeStudies(existingPack.items);
-      return {
-        packId: existingPack.id,
-        studies: packItems,
-        targetXp: existingPack.targetXp,
-      };
+      if (existingPack) {
+        const packItems = normalizeStudies(existingPack.items);
+        return {
+          packId: existingPack.id,
+          studies: packItems,
+          targetXp: existingPack.targetXp,
+        };
+      }
     }
 
     const result = await learningEngineService.generateDailyStudyPack({ userId });
@@ -320,7 +325,10 @@ export class StudyOrchestratorService {
     };
   }
 
-  async startDailyStudySession(userId: string): Promise<{ replyText: string; packId: string | null; itemId: string | null } | null> {
+  async startDailyStudySession(
+    userId: string,
+    options?: { forceRegenerate?: boolean },
+  ): Promise<{ replyText: string; packId: string | null; itemId: string | null } | null> {
     const user = await prisma.user.findUnique({
       where: { id: userId },
       select: {
@@ -337,7 +345,7 @@ export class StudyOrchestratorService {
       };
     }
 
-    const pack = await this.getTodayPackForUser(userId);
+    const pack = await this.getTodayPackForUser(userId, options);
     if (!pack) {
       return null;
     }

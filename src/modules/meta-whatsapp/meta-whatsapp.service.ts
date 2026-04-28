@@ -797,7 +797,9 @@ export class MetaWhatsAppService {
           },
         });
 
-        const studySession = await studyOrchestratorService.startDailyStudySession(user.id);
+        const studySession = await studyOrchestratorService.startDailyStudySession(user.id, {
+          forceRegenerate: true,
+        });
 
         if (!studySession) {
           this.logger.warn(

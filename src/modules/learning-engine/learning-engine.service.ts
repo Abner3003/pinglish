@@ -61,6 +61,7 @@ type LearningStateRecord = {
 
 type LearningProfileRecord = {
   timezone: string;
+  nativeLanguage: string;
   targetLanguage: string;
   goal: "TRAVEL" | "WORK" | "CONVERSATION" | "SCHOOL" | "OTHER";
   interests: string[];
@@ -68,6 +69,18 @@ type LearningProfileRecord = {
 
 type LessonMode = "teach" | "drill" | "remediate";
 type LessonResult = "correct" | "partial" | "incorrect" | "unclear";
+type LessonContext = {
+  topicKey: string;
+  mode: LessonMode;
+  session_id: string;
+  difficulty: string;
+  lesson_goal: string;
+  language: string;
+  conceptState: ConceptStateRecord | null;
+  historySummary: string;
+  context: Record<string, unknown>;
+  isFirstSession: boolean;
+};
 type ConceptStateRecord = {
   userId: string;
   topicKey: string;
@@ -188,6 +201,35 @@ function resolveDifficultyLabel(difficulty: number | null | undefined): string {
   }
 
   return "hard";
+}
+
+function resolveFirstSessionTopicKey(
+  profile: Pick<LearningProfileRecord, "goal" | "targetLanguage"> | null,
+): string {
+  return (
+    normalizeTopicKey(
+      `first_session_${profile?.goal ?? "general"}_${profile?.targetLanguage ?? "language"}`,
+    ) ?? "first_session"
+  );
+}
+
+function buildFirstSessionContext(
+  profile: Pick<
+    LearningProfileRecord,
+    "goal" | "targetLanguage" | "nativeLanguage" | "interests"
+  > | null,
+  level: UserJourneyLevel,
+): Record<string, unknown> {
+  return {
+    first_session: true,
+    learning_goal: profile?.goal ?? null,
+    target_language: profile?.targetLanguage ?? null,
+    native_language: profile?.nativeLanguage ?? null,
+    interests: profile?.interests ?? [],
+    level,
+      instruction:
+        "Crie a primeira sessão do aluno com uma aula curta, prática e personalizada. Evite assumir conhecimento prévio e comece do básico adaptado ao objetivo e interesses.",
+  };
 }
 
 function normalizeAnswerQuality(input: {
@@ -610,16 +652,9 @@ export class LearningEngineService {
     return this.generateRemoteDailyStudyPack(input);
   }
 
-  private async resolvePrimaryLessonContext(input: GeneratePackInput): Promise<{
-    topicKey: string;
-    mode: LessonMode;
-    session_id: string;
-    difficulty: string;
-  lesson_goal: string;
-  language: string;
-  conceptState: ConceptStateRecord | null;
-  historySummary: string;
-} | null> {
+  private async resolvePrimaryLessonContext(
+    input: GeneratePackInput,
+  ): Promise<LessonContext | null> {
     const profile = await prisma.learningProfile.findUnique({
       where: { userId: input.userId },
     });
@@ -631,6 +666,27 @@ export class LearningEngineService {
     const level = journey?.level ?? UserJourneyLevel.INICIANTE;
     const tenantId =
       input.tenantId ?? profile?.tenantId ?? (await resolveDefaultTenantId());
+    const hasLearningHistory = await prisma.userLearningState.count({
+      where: {
+        userId: input.userId,
+      },
+    });
+
+    if (hasLearningHistory === 0) {
+      return {
+        topicKey: resolveFirstSessionTopicKey(profile),
+        mode: "teach",
+        session_id: randomUUID(),
+        difficulty: "easy",
+        lesson_goal: "first_session",
+        language: profile?.nativeLanguage ?? "pt-BR",
+        conceptState: null,
+        historySummary: "primeira sessão do aluno; apresente uma aula inicial curta e personalizada",
+        context: buildFirstSessionContext(profile, level),
+        isFirstSession: true,
+      };
+    }
+
     if (tenantId) {
       await ensureTenantHasSeedItems(tenantId, prisma);
     }
@@ -768,6 +824,28 @@ export class LearningEngineService {
             lastReviewedAt: conceptState.lastReviewedAt,
           }
         : null,
+      context:
+        conceptState && resolveLessonMode(conceptState) === "remediate" && conceptState.lastResult
+          ? {
+              concept_seen: true,
+              last_error:
+                conceptState.lastResult === "incorrect"
+                  ? "o aluno errou ao tentar aplicar o conceito"
+                  : "o aluno precisa de correção focada no erro anterior",
+              history_summary:
+                conceptState.lastResult === "correct"
+                  ? "usuário já viu o conceito e respondeu corretamente antes"
+                  : "usuário já viu o conceito, mas ainda precisa de reforço",
+            }
+          : {
+              concept_seen: Boolean(conceptState?.conceptSeenAt),
+              history_summary: conceptState?.conceptSeenAt
+                ? conceptState.lastResult === "correct"
+                  ? "usuário já viu o conceito e respondeu corretamente antes"
+                  : "usuário já viu o conceito, mas ainda precisa de reforço"
+                : "usuário está começando o tópico",
+            },
+      isFirstSession: false,
     };
   }
 
@@ -785,6 +863,7 @@ export class LearningEngineService {
     const learningProfile: LearningProfileRecord | null = profile
       ? {
           timezone: profile.timezone,
+          nativeLanguage: profile.nativeLanguage,
           targetLanguage: profile.targetLanguage,
           goal: profile.goal,
           interests: profile.interests,
@@ -840,6 +919,7 @@ export class LearningEngineService {
         session_id: lessonContext.session_id,
         mode: lessonContext.mode,
         topic: lessonContext.topicKey,
+        firstSession: lessonContext.isFirstSession,
       },
       "[penglish-ai] request",
     );
@@ -855,20 +935,7 @@ export class LearningEngineService {
       difficulty: lessonContext.difficulty,
       topic: lessonContext.topicKey,
       language: lessonContext.language,
-      context:
-        lessonContext.mode === "remediate" && lessonContext.conceptState?.lastResult
-          ? {
-              concept_seen: true,
-              last_error:
-                lessonContext.conceptState.lastResult === "incorrect"
-                  ? "o aluno errou ao tentar aplicar o conceito"
-                  : "o aluno precisa de correção focada no erro anterior",
-              history_summary: lessonContext.historySummary,
-            }
-          : {
-              concept_seen: Boolean(lessonContext.conceptState?.conceptSeenAt),
-              history_summary: lessonContext.historySummary,
-            },
+      context: lessonContext.context,
     });
 
     if (!mountResult) {
@@ -976,6 +1043,7 @@ export class LearningEngineService {
       const learningProfile: LearningProfileRecord | null = profile
         ? {
             timezone: profile.timezone,
+            nativeLanguage: profile.nativeLanguage,
             targetLanguage: profile.targetLanguage,
             goal: profile.goal,
             interests: profile.interests,
