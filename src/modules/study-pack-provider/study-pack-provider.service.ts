@@ -527,6 +527,36 @@ function logRemoteStudyResponse(
   console.info({ scope: "study-pack-provider", step, ...details }, "[penglish-ai] response");
 }
 
+function summarizeResponseBody(body: unknown): Record<string, unknown> {
+  if (typeof body === "string") {
+    return {
+      bodyType: "string",
+      bodyPreview: body.slice(0, 500),
+    };
+  }
+
+  if (Array.isArray(body)) {
+    return {
+      bodyType: "array",
+      bodyLength: body.length,
+    };
+  }
+
+  if (isRecord(body)) {
+    return {
+      bodyType: "object",
+      bodyKeys: Object.keys(body),
+      ok: typeof body.ok === "boolean" ? body.ok : undefined,
+      error: getString(body.error),
+      message: getString(body.message),
+    };
+  }
+
+  return {
+    bodyType: typeof body,
+  };
+}
+
 export class StudyPackProviderService {
   buildLessonGenerationPayload(input: RemoteStudyPackInput): Record<string, unknown> {
     return {
@@ -610,6 +640,7 @@ export class StudyPackProviderService {
             studiesCount: studies.length,
             userId: input.userId,
             session_id: input.session_id,
+            ...(remotePackId && studies.length > 0 ? {} : summarizeResponseBody(response.body)),
           });
 
           if (remotePackId) {
