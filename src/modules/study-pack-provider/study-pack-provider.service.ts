@@ -51,6 +51,39 @@ export type RemoteStudyPackResult = {
   raw: unknown;
 };
 
+export type GapReinforcementRequestInput = {
+  userId: string;
+  tenantId: string | null;
+  targetLanguage: string;
+  nativeLanguage: string;
+  limit: number;
+};
+
+export type GapReinforcementItem = {
+  title?: string;
+  text: string;
+  audioScript?: string;
+  encouragementMessage?: string;
+  order?: number;
+  examples?: string[];
+};
+
+export type GapReinforcementResult = {
+  ok: true;
+  mode: "gap_reinforcement";
+  data: {
+    userId: string;
+    tenantId: string | null;
+    targetLanguage: string;
+    nativeLanguage: string;
+    limit: number;
+    items: GapReinforcementItem[];
+    audioScript?: string;
+    encouragementMessage?: string;
+    source: "openai" | "fallback";
+  };
+};
+
 export type ReviewResultPayload = {
   ok: true;
   mode: "review_result";
@@ -131,6 +164,22 @@ function unwrapRemotePackPayload(payload: unknown): unknown {
   }
 
   if (isRecord(payload.data) && getString(payload.mode) === "pack") {
+    return payload.data;
+  }
+
+  return payload;
+}
+
+function unwrapRemoteGapPayload(payload: unknown): unknown {
+  if (!isRecord(payload)) {
+    return payload;
+  }
+
+  if (isRecord(payload.data) && getString(payload.mode) === "gap_reinforcement") {
+    return payload.data;
+  }
+
+  if (isRecord(payload.data) && getString(payload.mode) === "gap_reinforcement_result") {
     return payload.data;
   }
 
@@ -411,6 +460,145 @@ function extractAnalysisData(payload: unknown): ReviewResultPayload["data"] | nu
   };
 }
 
+function extractGapReinforcementItem(value: unknown, index: number): GapReinforcementItem[] {
+  if (typeof value === "string") {
+    const text = value.trim();
+
+    return text ? [{ text, order: index + 1 }] : [];
+  }
+
+  if (!isRecord(value)) {
+    return [];
+  }
+
+  const text =
+    getString(value.text) ??
+    getString(value.content) ??
+    getString(value.message) ??
+    getString(value.tip) ??
+    getString(value.body) ??
+    getString(value.description) ??
+    getString(value.title);
+
+  if (!text) {
+    return [];
+  }
+
+  const examples = Array.isArray(value.examples)
+    ? value.examples.filter((example): example is string => typeof example === "string")
+    : undefined;
+
+  return [
+    {
+      title: getString(value.title),
+      text,
+      audioScript:
+        getString(value.audioScript) ??
+        getString(value.audio_script) ??
+        getString(value.voiceScript) ??
+        getString(value.voice_script) ??
+        getString(value.tts) ??
+        getString(value.speechScript),
+      encouragementMessage:
+        getString(value.encouragementMessage) ??
+        getString(value.encouragement_message) ??
+        getString(value.encouragement),
+      order: getNumber(value.order) ?? getNumber(value.position) ?? index + 1,
+      examples: examples && examples.length > 0 ? examples : undefined,
+    },
+  ];
+}
+
+function extractGapReinforcementItems(payload: unknown): GapReinforcementItem[] {
+  if (Array.isArray(payload)) {
+    return payload.flatMap((entry, index) => extractGapReinforcementItem(entry, index));
+  }
+
+  const data = unwrapRemoteGapPayload(payload);
+
+  if (!isRecord(data)) {
+    return [];
+  }
+
+  const directCandidates = [
+    data.items,
+    data.reinforcements,
+    data.gapReinforcement,
+    data.gap_reinforcement,
+    data.dicas,
+    data.content,
+    data.messages,
+    isRecord(data.gap) ? data.gap.items : undefined,
+    isRecord(data.result) ? data.result.items : undefined,
+    isRecord(payload) && isRecord(payload.data) ? payload.data.items : undefined,
+  ];
+
+  for (const candidate of directCandidates) {
+    if (Array.isArray(candidate)) {
+      return candidate.flatMap((entry, index) => extractGapReinforcementItem(entry, index));
+    }
+  }
+
+  return extractGapReinforcementItem(data, 0);
+}
+
+function extractGapReinforcementMeta(payload: unknown): {
+  userId: string;
+  tenantId: string | null;
+  targetLanguage: string | null;
+  nativeLanguage: string | null;
+  limit: number;
+  audioScript?: string;
+  encouragementMessage?: string;
+  source: "openai" | "fallback";
+} | null {
+  const data = unwrapRemoteGapPayload(payload);
+  const payloadRecord = isRecord(payload) ? payload : null;
+  const record = isRecord(data) ? data : payloadRecord;
+  const source = record && getString(record.source) === "fallback" ? "fallback" : "openai";
+  const items = extractGapReinforcementItems(payload);
+  const audioScript =
+    record
+      ? getString(record.audioScript) ??
+        getString(record.audio_script) ??
+        getString(record.voiceScript) ??
+        getString(record.tts) ??
+        ""
+      : "";
+  const encouragementMessage =
+    record
+      ? getString(record.encouragementMessage) ??
+        getString(record.encouragement_message) ??
+        getString(record.encouragement) ??
+        ""
+      : "";
+
+  const hasOutput = items.length > 0 || Boolean(audioScript || encouragementMessage);
+
+  if (!hasOutput) {
+    return null;
+  }
+
+  return {
+    userId: getString(record?.userId) ?? getString(payloadRecord?.userId) ?? "",
+    tenantId: getString(record?.tenantId) ?? getString(payloadRecord?.tenantId) ?? null,
+    targetLanguage:
+      getString(record?.targetLanguage) ??
+      getString(record?.target_language) ??
+      getString(payloadRecord?.targetLanguage) ??
+      null,
+    nativeLanguage:
+      getString(record?.nativeLanguage) ??
+      getString(record?.native_language) ??
+      getString(payloadRecord?.nativeLanguage) ??
+      null,
+    limit: getNumber(record?.limit) ?? getNumber(payloadRecord?.limit) ?? 0,
+    audioScript: audioScript || undefined,
+    encouragementMessage: encouragementMessage || undefined,
+    source,
+  };
+}
+
 function scoreToQuality(score: number): 0 | 1 | 2 | 3 | 4 | 5 {
   if (score >= 90) return 5;
   if (score >= 75) return 4;
@@ -612,14 +800,14 @@ function getPayloadSizeBytes(payload: unknown): number | null {
 }
 
 function logRemoteStudyCall(
-  step: "mountPack" | "getPackById" | "analyzeReviewResponse" | "normalizeLevel",
+  step: "mountPack" | "getPackById" | "analyzeReviewResponse" | "normalizeLevel" | "generateGapReinforcement",
   details: Record<string, unknown>,
 ): void {
   console.info({ scope: "study-pack-provider", step, ...details }, "[penglish-ai] request");
 }
 
 function logRemoteStudyResponse(
-  step: "mountPack" | "getPackById" | "analyzeReviewResponse" | "normalizeLevel",
+  step: "mountPack" | "getPackById" | "analyzeReviewResponse" | "normalizeLevel" | "generateGapReinforcement",
   details: Record<string, unknown>,
 ): void {
   console.info({ scope: "study-pack-provider", step, ...details }, "[penglish-ai] response");
@@ -1021,6 +1209,102 @@ export class StudyPackProviderService {
       });
     } catch (error) {
       console.warn("[study-pack-provider] analyzeReviewResponse failed", error);
+    }
+
+    return null;
+  }
+
+  async generateGapReinforcement(
+    input: GapReinforcementRequestInput,
+  ): Promise<GapReinforcementResult | null> {
+    if (!env.STUDY_PACK_SERVICE_BASE_URL) {
+      return null;
+    }
+
+    try {
+      const url = buildUrl(
+        env.STUDY_PACK_SERVICE_BASE_URL,
+        "/generateGapReinforcement",
+      );
+      const payload = {
+        userId: input.userId,
+        tenantId: input.tenantId ?? null,
+        targetLanguage: input.targetLanguage,
+        nativeLanguage: input.nativeLanguage,
+        limit: input.limit,
+      };
+      const startedAt = Date.now();
+
+      logRemoteStudyCall("generateGapReinforcement", {
+        url,
+        userId: input.userId,
+        tenantId: input.tenantId,
+        targetLanguage: input.targetLanguage,
+        nativeLanguage: input.nativeLanguage,
+        limit: input.limit,
+        payloadSizeBytes: getPayloadSizeBytes(payload),
+      });
+
+      const response = await retryRemoteCall(async () => {
+        const result = await fetchJson(url, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(env.STUDY_PACK_SERVICE_TOKEN
+              ? { Authorization: `Bearer ${env.STUDY_PACK_SERVICE_TOKEN}` }
+              : {}),
+          },
+          body: JSON.stringify(payload),
+        });
+
+        if (!result.ok && shouldRetryStatus(result.status)) {
+          throw new Error(`Remote gap reinforcement failed with status ${result.status}`);
+        }
+
+        return result;
+      });
+
+      const gapData = extractGapReinforcementMeta(response.body);
+
+      if (response.ok && gapData) {
+        logRemoteStudyResponse("generateGapReinforcement", {
+          ok: true,
+          status: response.status,
+          durationMs: Date.now() - startedAt,
+          userId: input.userId,
+          tenantId: input.tenantId,
+          itemsCount: extractGapReinforcementItems(response.body).length,
+          ...(gapData.audioScript ? { audioScript: gapData.audioScript } : {}),
+          ...(gapData.encouragementMessage ? { encouragementMessage: gapData.encouragementMessage } : {}),
+        });
+
+        return {
+          ok: true,
+          mode: "gap_reinforcement",
+          data: {
+            userId: gapData.userId || input.userId,
+            tenantId: gapData.tenantId ?? input.tenantId,
+            targetLanguage: gapData.targetLanguage ?? input.targetLanguage,
+            nativeLanguage: gapData.nativeLanguage ?? input.nativeLanguage,
+            limit: gapData.limit || input.limit,
+            items: extractGapReinforcementItems(response.body),
+            ...(gapData.audioScript ? { audioScript: gapData.audioScript } : {}),
+            ...(gapData.encouragementMessage ? { encouragementMessage: gapData.encouragementMessage } : {}),
+            source: gapData.source,
+          },
+        };
+      }
+
+      logRemoteStudyResponse("generateGapReinforcement", {
+        ok: false,
+        status: response.status,
+        durationMs: Date.now() - startedAt,
+        userId: input.userId,
+        tenantId: input.tenantId,
+        ...(isRecord(response.body) ? summarizeResponseBody(response.body) : { bodyType: typeof response.body }),
+      });
+    } catch (error) {
+      console.warn("[study-pack-provider] generateGapReinforcement failed", error);
     }
 
     return null;

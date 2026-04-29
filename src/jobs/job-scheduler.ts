@@ -3,6 +3,7 @@ import { JobRunStatus } from "../generated/prisma/index.js";
 import { env } from "../config/env.js";
 import { prisma } from "../lib/prisma.js";
 import { runDailyStudyPacksGenerator } from "./daily-study-packs.generator.js";
+import { runGapReinforcementDispatcher } from "./gap-reinforcement.dispatcher.js";
 import { runStudyPackReviewsDispatcher } from "./study-pack-reviews.dispatcher.js";
 
 type SchedulerHandle = {
@@ -56,6 +57,10 @@ function formatDateKey(parts: Pick<ZonedDateParts, "year" | "month" | "day">): s
     String(parts.month).padStart(2, "0"),
     String(parts.day).padStart(2, "0"),
   ].join("-");
+}
+
+function formatHourlyKey(parts: ZonedDateParts): string {
+  return `${formatDateKey(parts)}-${String(parts.hour).padStart(2, "0")}`;
 }
 
 function parseDailyCronTime(expression: string): { hour: number; minute: number } | null {
@@ -194,6 +199,29 @@ async function runTrackedDailyStudyPackJob(scheduledFor: string): Promise<void> 
   }
 }
 
+async function runTrackedGapReinforcementJob(scheduledFor: string): Promise<void> {
+  const claim = await claimScheduledJobRun("gap-reinforcement", scheduledFor);
+
+  if (claim.kind === "completed" || claim.kind === "processing") {
+    console.info(
+      `[job-scheduler] skipped gap-reinforcement scheduledFor=${scheduledFor} reason=${claim.kind}`,
+    );
+    return;
+  }
+
+  try {
+    await runJob("gap-reinforcement", runGapReinforcementDispatcher);
+    await completeScheduledJobRun("gap-reinforcement", scheduledFor);
+  } catch (error) {
+    console.error(
+      `[job-scheduler] failed gap-reinforcement scheduledFor=${scheduledFor}`,
+      error,
+    );
+    await failScheduledJobRun("gap-reinforcement", scheduledFor, error);
+    throw error;
+  }
+}
+
 async function runDailyStudyPackCatchUpIfNeeded(): Promise<void> {
   const cronTime = parseDailyCronTime(env.DAILY_STUDY_PACKS_CRON);
 
@@ -248,6 +276,18 @@ export function startJobScheduler(): SchedulerHandle {
         timezone: env.JOB_SCHEDULER_TIMEZONE,
       },
     ),
+    cron.schedule(
+      "5 * * * *",
+      () => {
+        const scheduledFor = formatHourlyKey(getZonedDateParts(new Date(), env.JOB_SCHEDULER_TIMEZONE));
+        void runTrackedGapReinforcementJob(scheduledFor).catch((error) => {
+          console.error("[job-scheduler] gap-reinforcement cron failed", error);
+        });
+      },
+      {
+        timezone: env.JOB_SCHEDULER_TIMEZONE,
+      },
+    ),
   ];
 
   schedulerHandle = {
@@ -259,7 +299,7 @@ export function startJobScheduler(): SchedulerHandle {
   };
 
   console.info(
-    `[job-scheduler] enabled daily=${env.DAILY_STUDY_PACKS_CRON} reviews=${env.STUDY_PACK_REVIEWS_CRON} timezone=${env.JOB_SCHEDULER_TIMEZONE}`,
+    `[job-scheduler] enabled daily=${env.DAILY_STUDY_PACKS_CRON} reviews=${env.STUDY_PACK_REVIEWS_CRON} gap=5 * * * * timezone=${env.JOB_SCHEDULER_TIMEZONE}`,
   );
 
   void runDailyStudyPackCatchUpIfNeeded().catch((error) => {

@@ -559,11 +559,6 @@ function buildBotReply(input: BotReplyInput): string {
 
   return `Beleza, ${input.userName}. Se quiser seguir estudando em ${languageHint}, eu continuo daqui.`;
 }
-
-function addHours(date: Date, hours: number): Date {
-  return new Date(date.getTime() + hours * 60 * 60 * 1000);
-}
-
 function scoreToQuality(score: number): 0 | 1 | 2 | 3 | 4 | 5 {
   if (score >= 90) return 5;
   if (score >= 75) return 4;
