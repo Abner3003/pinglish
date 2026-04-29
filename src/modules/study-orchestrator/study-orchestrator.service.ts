@@ -452,14 +452,6 @@ function buildBotReply(input: BotReplyInput): string {
   return `Beleza, ${input.userName}. Se quiser seguir estudando em ${languageHint}, eu continuo daqui.`;
 }
 
-function formatStudyPrompt(study: { text: string; meaning?: string | null }): string {
-  if (!study.meaning) {
-    return study.text;
-  }
-
-  return `${study.text} - ${study.meaning}`;
-}
-
 function addHours(date: Date, hours: number): Date {
   return new Date(date.getTime() + hours * 60 * 60 * 1000);
 }
