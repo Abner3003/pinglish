@@ -743,6 +743,7 @@ export class StudyPackProviderService {
           mode: input.mode,
           topic: input.topic,
           level: input.level,
+          payload,
           payloadSizeBytes: getPayloadSizeBytes(payload),
         });
 
