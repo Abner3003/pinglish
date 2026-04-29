@@ -24,6 +24,7 @@ type HandleInboundResult =
   | {
       kind: "study";
       replyText: string;
+      followUpReplyText?: string;
       answerQuality: number;
       confidence: number;
       reason: string;
@@ -954,7 +955,8 @@ export class StudyOrchestratorService {
 
       return {
         kind: "study",
-        replyText: [correctionMessage, nextMessage].join("\n\n"),
+        replyText: correctionMessage,
+        followUpReplyText: nextMessage,
         answerQuality: scoreToQuality(analysis.data.score ?? 0),
         confidence: analysis.data.score ? Math.min(1, Math.max(0.3, analysis.data.score / 100)) : 0.4,
         reason: analysis.data.source,

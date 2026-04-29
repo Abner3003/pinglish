@@ -798,6 +798,10 @@ export class MetaWhatsAppService {
 
         if (result.kind !== "ignored") {
           await this.sendReply(user.phone, result.replyText, message.messageId);
+
+          if (result.kind === "study" && result.followUpReplyText) {
+            await this.sendWhatsAppMessage(user.phone, result.followUpReplyText);
+          }
         }
 
         return;
