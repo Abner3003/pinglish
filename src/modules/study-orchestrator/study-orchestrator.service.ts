@@ -306,6 +306,46 @@ function buildLessonFeedbackQuestion(): string {
   ]);
 }
 
+function normalizeNativeLanguage(value?: string | null): string {
+  return (value ?? "").trim().toUpperCase();
+}
+
+function buildReviewScheduleMessage(
+  nextReviewAt: Date,
+  now = new Date(),
+  nativeLanguage?: string | null,
+): string {
+  const remainingMs = nextReviewAt.getTime() - now.getTime();
+  const remainingMinutes = Math.max(1, Math.round(remainingMs / (60 * 1000)));
+  const language = normalizeNativeLanguage(nativeLanguage);
+
+  if (language.includes("EN")) {
+    return joinNonEmptyBlocks([
+      `Your next review is scheduled in about ${formatMinutesLabel(remainingMinutes)}.`,
+      "That spacing helps your brain retrieve the content at the right moment. It strengthens memory and improves retention.",
+    ]);
+  }
+
+  if (language.includes("ES")) {
+    return joinNonEmptyBlocks([
+      `Tu próximo repaso está programado para dentro de ${formatMinutesLabel(remainingMinutes)}.`,
+      "Ese intervalo ayuda a tu cerebro a recuperar el contenido en el momento adecuado. Fortalece la memoria y mejora la retención.",
+    ]);
+  }
+
+  if (language.includes("FR")) {
+    return joinNonEmptyBlocks([
+      `Votre prochaine révision est prévue dans environ ${formatMinutesLabel(remainingMinutes)}.`,
+      "Cet intervalle aide votre cerveau à récupérer le contenu au bon moment. Il renforce la mémoire et améliore la rétention.",
+    ]);
+  }
+
+  return joinNonEmptyBlocks([
+    `Seu próximo review está agendado para daqui a ${formatMinutesLabel(remainingMinutes)}.`,
+    "Esse intervalo ajuda a reforçar a memória espaçada e melhora a retenção do que você aprendeu.",
+  ]);
+}
+
 function normalizeLessonDifficultyFeedback(value: string): LessonDifficultyFeedback | null {
   const normalized = normalizeText(value);
 
@@ -1217,6 +1257,7 @@ export class StudyOrchestratorService {
     userName: string;
     text: string;
     targetLanguage?: string | null;
+    nativeLanguage?: string | null;
     interests?: string[] | null;
   }): Promise<HandleInboundResult> {
     const channel = await prisma.userChannel.findUnique({
@@ -1224,6 +1265,7 @@ export class StudyOrchestratorService {
       select: {
         status: true,
         awaitingStudyReply: true,
+        currentPackId: true,
       },
     });
 
@@ -1232,6 +1274,18 @@ export class StudyOrchestratorService {
         kind: "ignored",
       };
     }
+
+    const now = new Date();
+    const activePack = channel.currentPackId
+      ? await prisma.dailyStudyPack.findUnique({
+          where: { id: channel.currentPackId },
+          select: {
+            id: true,
+            nextReviewAt: true,
+            completed: true,
+          },
+        })
+      : null;
 
     if (channel.awaitingStudyReply) {
       return this.handleOptInMessage({
@@ -1248,6 +1302,13 @@ export class StudyOrchestratorService {
         lastOutboundAt: new Date(),
       },
     });
+
+    if (activePack?.completed && activePack.nextReviewAt && activePack.nextReviewAt > now) {
+      return {
+        kind: "bot",
+        replyText: buildReviewScheduleMessage(activePack.nextReviewAt, now, input.nativeLanguage),
+      };
+    }
 
     return {
       kind: "bot",

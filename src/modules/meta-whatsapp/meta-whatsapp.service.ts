@@ -765,6 +765,16 @@ export class MetaWhatsAppService {
         },
       }));
 
+    const learningProfile = await prisma.learningProfile.findUnique({
+      where: {
+        userId: user.id,
+      },
+      select: {
+        targetLanguage: true,
+        nativeLanguage: true,
+      },
+    });
+
     await this.logUserTenantContext("inbound", phone, {
       messageLength: text.length,
       messageId: message.messageId,
@@ -794,6 +804,8 @@ export class MetaWhatsAppService {
           userId: user.id,
           userName: user.name,
           text,
+          targetLanguage: learningProfile?.targetLanguage ?? null,
+          nativeLanguage: learningProfile?.nativeLanguage ?? null,
         });
 
         if (result.kind !== "ignored") {
