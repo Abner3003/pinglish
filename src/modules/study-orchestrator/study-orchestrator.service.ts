@@ -130,9 +130,7 @@ function getString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
-function getNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
+
 
 function extractStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) {
