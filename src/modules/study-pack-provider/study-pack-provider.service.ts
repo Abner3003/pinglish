@@ -143,6 +143,16 @@ export type NormalizeLevelResult = {
 
 type JsonRecord = Record<string, unknown>;
 
+class RemoteHttpError extends Error {
+  constructor(
+    message: string,
+    public readonly status: number,
+  ) {
+    super(message);
+    this.name = "RemoteHttpError";
+  }
+}
+
 const REMOTE_REQUEST_RETRIES = 3;
 const REMOTE_REQUEST_RETRY_DELAY_MS = 500;
 
@@ -197,6 +207,10 @@ function sleep(ms: number): Promise<void> {
 }
 
 function isRetryableRemoteFailure(error: unknown): boolean {
+  if (error instanceof RemoteHttpError) {
+    return error.status >= 500 || error.status === 429;
+  }
+
   if (error instanceof TypeError) {
     return true;
   }
@@ -791,6 +805,12 @@ function shouldRetryStatus(status: number): boolean {
   return status >= 500 || status === 429;
 }
 
+function throwIfRetryableStatus(status: number, context: string): void {
+  if (shouldRetryStatus(status)) {
+    throw new RemoteHttpError(context, status);
+  }
+}
+
 function getPayloadSizeBytes(payload: unknown): number | null {
   try {
     return Buffer.byteLength(JSON.stringify(payload), "utf8");
@@ -995,14 +1015,12 @@ export class StudyPackProviderService {
                 : {}),
             },
             body: JSON.stringify(payload),
-          });
-
-          if (!result.ok && shouldRetryStatus(result.status)) {
-            throw new Error(`Remote pack generation failed with status ${result.status}`);
-          }
-
-          return result;
         });
+
+        throwIfRetryableStatus(result.status, `Remote pack generation failed with status ${result.status}`);
+
+        return result;
+      });
 
         if (response.ok) {
           const remotePackId = extractPackId(response.body);
@@ -1106,9 +1124,7 @@ export class StudyPackProviderService {
             body: JSON.stringify({ packId }),
           });
 
-          if (!postResult.ok && shouldRetryStatus(postResult.status)) {
-            throw new Error(`Remote pack fetch failed with status ${postResult.status}`);
-          }
+          throwIfRetryableStatus(postResult.status, `Remote pack fetch failed with status ${postResult.status}`);
 
           return postResult.ok ? postResult : getResult;
         });
@@ -1173,9 +1189,7 @@ export class StudyPackProviderService {
           body: JSON.stringify(payload),
         });
 
-        if (!result.ok && shouldRetryStatus(result.status)) {
-          throw new Error(`Remote analysis failed with status ${result.status}`);
-        }
+        throwIfRetryableStatus(result.status, `Remote analysis failed with status ${result.status}`);
 
         return result;
       });
@@ -1257,9 +1271,7 @@ export class StudyPackProviderService {
           body: JSON.stringify(payload),
         });
 
-        if (!result.ok && shouldRetryStatus(result.status)) {
-          throw new Error(`Remote gap reinforcement failed with status ${result.status}`);
-        }
+        throwIfRetryableStatus(result.status, `Remote gap reinforcement failed with status ${result.status}`);
 
         return result;
       });
