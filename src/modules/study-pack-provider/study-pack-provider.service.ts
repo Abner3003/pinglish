@@ -124,6 +124,18 @@ function getNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
+function unwrapRemotePackPayload(payload: unknown): unknown {
+  if (!isRecord(payload)) {
+    return payload;
+  }
+
+  if (isRecord(payload.data) && getString(payload.mode) === "pack") {
+    return payload.data;
+  }
+
+  return payload;
+}
+
 function buildUrl(baseUrl: string, path: string): string {
   return new URL(path, baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`).toString();
 }
@@ -168,21 +180,28 @@ async function retryRemoteCall<T>(operation: () => Promise<T>): Promise<T> {
 }
 
 function extractPackId(payload: unknown): string | null {
-  if (!isRecord(payload)) {
+  const data = unwrapRemotePackPayload(payload);
+
+  if (!isRecord(data)) {
     return null;
   }
 
   const candidates = [
-    payload.packId,
-    payload.id,
-    payload.remotePackId,
-    payload.sessionId,
-    payload.session_id,
-    isRecord(payload.data) ? payload.data.packId : undefined,
-    isRecord(payload.data) ? payload.data.id : undefined,
-    isRecord(payload.pack) ? payload.pack.id : undefined,
-    isRecord(payload.lesson) ? payload.lesson.sessionId : undefined,
-    isRecord(payload.lesson) ? payload.lesson.session_id : undefined,
+    data.packId,
+    data.id,
+    data.remotePackId,
+    data.sessionId,
+    data.session_id,
+    isRecord(payload) ? payload.packId : undefined,
+    isRecord(payload) ? payload.id : undefined,
+    isRecord(payload) ? payload.remotePackId : undefined,
+    isRecord(payload) ? payload.sessionId : undefined,
+    isRecord(payload) ? payload.session_id : undefined,
+    isRecord(payload) ? payload.data && isRecord(payload.data) ? payload.data.packId : undefined : undefined,
+    isRecord(payload) ? payload.data && isRecord(payload.data) ? payload.data.id : undefined : undefined,
+    isRecord(payload) ? payload.pack && isRecord(payload.pack) ? payload.pack.id : undefined : undefined,
+    isRecord(payload) ? payload.lesson && isRecord(payload.lesson) ? payload.lesson.sessionId : undefined : undefined,
+    isRecord(payload) ? payload.lesson && isRecord(payload.lesson) ? payload.lesson.session_id : undefined : undefined,
   ];
 
   for (const candidate of candidates) {
@@ -201,39 +220,41 @@ function extractStudies(payload: unknown): RemoteStudyItem[] {
     return payload.flatMap((entry, index) => normalizeStudyItem(entry, index));
   }
 
-  if (!isRecord(payload)) {
+  const data = unwrapRemotePackPayload(payload);
+
+  if (!isRecord(data)) {
     return [];
   }
 
   const directCandidates = [
-    payload.studies,
-    payload.items,
-    payload.content,
-    isRecord(payload.lesson) && typeof payload.lesson.message === "string"
+    data.studies,
+    data.items,
+    data.content,
+    isRecord(data.lesson) && typeof data.lesson.message === "string"
       ? [
           {
             itemId:
-              getString(payload.sessionId) ??
-              getString(payload.session_id) ??
-              getString(payload.topic) ??
-              getString(payload.topicKey) ??
+              getString(data.sessionId) ??
+              getString(data.session_id) ??
+              getString(data.topic) ??
+              getString(data.topicKey) ??
               "lesson",
-            text: payload.lesson.message,
+            text: data.lesson.message,
             meaning:
-              typeof payload.lesson.explanation === "string"
-                ? payload.lesson.explanation
+              typeof data.lesson.explanation === "string"
+                ? data.lesson.explanation
                 : "",
-            topicKey: getString(payload.topic) ?? getString(payload.topicKey) ?? undefined,
+            topicKey: getString(data.topic) ?? getString(data.topicKey) ?? undefined,
             source: "lesson_result",
             order: 1,
-            metadata: isRecord(payload.lesson.metadata) ? payload.lesson.metadata : undefined,
+            metadata: isRecord(data.lesson.metadata) ? data.lesson.metadata : undefined,
           },
         ]
       : undefined,
-    isRecord(payload.data) ? payload.data.studies : undefined,
-    isRecord(payload.data) ? payload.data.items : undefined,
-    isRecord(payload.pack) ? payload.pack.studies : undefined,
-    isRecord(payload.pack) ? payload.pack.items : undefined,
+    isRecord(payload) && isRecord(payload.data) ? payload.data.studies : undefined,
+    isRecord(payload) && isRecord(payload.data) ? payload.data.items : undefined,
+    isRecord(payload) && isRecord(payload.pack) ? payload.pack.studies : undefined,
+    isRecord(payload) && isRecord(payload.pack) ? payload.pack.items : undefined,
   ];
 
   for (const candidate of directCandidates) {
@@ -246,16 +267,20 @@ function extractStudies(payload: unknown): RemoteStudyItem[] {
 }
 
 function extractTargetXp(payload: unknown): number | undefined {
-  if (!isRecord(payload)) {
+  const data = unwrapRemotePackPayload(payload);
+
+  if (!isRecord(data)) {
     return undefined;
   }
 
   const candidates = [
-    payload.targetXp,
-    payload.xp,
-    isRecord(payload.lesson) ? payload.lesson.xp : undefined,
-    isRecord(payload.data) ? payload.data.targetXp : undefined,
-    isRecord(payload.pack) ? payload.pack.targetXp : undefined,
+    data.targetXp,
+    data.xp,
+    isRecord(data.lesson) ? data.lesson.xp : undefined,
+    isRecord(payload) ? payload.targetXp : undefined,
+    isRecord(payload) ? payload.xp : undefined,
+    isRecord(payload) && isRecord(payload.data) ? payload.data.targetXp : undefined,
+    isRecord(payload) && isRecord(payload.pack) ? payload.pack.targetXp : undefined,
   ];
 
   for (const candidate of candidates) {

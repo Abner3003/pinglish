@@ -45,6 +45,7 @@ type PackResult = {
   remotePackId: string | null;
   studies: StudyPackStudy[];
   targetXp: number;
+  rawItems: Prisma.JsonValue;
 };
 
 function extractRemotePackIdFromPackItems(items: Prisma.JsonValue): string | null {
@@ -103,6 +104,173 @@ function normalizeStudies(items: Prisma.JsonValue): StudyPackStudy[] {
   }
 
   return [];
+}
+
+function unwrapPackPayload(items: Prisma.JsonValue): Record<string, unknown> | null {
+  if (!isRecord(items)) {
+    return null;
+  }
+
+  if (
+    isRecord(items.raw) &&
+    getString(items.mode) === "pack" &&
+    isRecord(items.data)
+  ) {
+    return items.data;
+  }
+
+  if (isRecord(items.data) && getString(items.mode) === "pack") {
+    return items.data;
+  }
+
+  return items;
+}
+
+function getString(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+function getNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function extractStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0);
+}
+
+function extractPackTitle(items: Prisma.JsonValue, fallbackStudy?: StudyPackStudy | null): string | undefined {
+  const payload = unwrapPackPayload(items);
+
+  if (payload) {
+    const candidates = [
+      getString(payload.title),
+      getString(payload.topic),
+      getString(payload.topicKey),
+      getString(payload.lessonTopic),
+      getString(payload.name),
+      getString(payload.subject),
+      fallbackStudy?.topicKey,
+    ];
+
+    for (const candidate of candidates) {
+      if (candidate && candidate.trim().length > 0) {
+        return candidate;
+      }
+    }
+  }
+
+  return fallbackStudy?.topicKey;
+}
+
+function extractLessonItems(items: Prisma.JsonValue): Record<string, unknown>[] {
+  const payload = unwrapPackPayload(items);
+
+  if (!payload) {
+    return [];
+  }
+
+  const candidates = [
+    payload.items,
+    payload.studies,
+    payload.content,
+    isRecord(payload.lesson)
+      ? [
+          {
+            title: payload.lesson.title,
+            content: payload.lesson.message,
+            examples: payload.lesson.examples,
+            review: payload.lesson.review,
+            exercise: payload.lesson.exercise,
+            order: payload.lesson.order,
+          },
+        ]
+      : undefined,
+  ];
+
+  for (const candidate of candidates) {
+    if (Array.isArray(candidate)) {
+      return candidate.filter(isRecord);
+    }
+  }
+
+  return [];
+}
+
+function extractLessonMessageParts(items: Prisma.JsonValue, firstStudy: StudyPackStudy): {
+  title: string;
+  content: string;
+  examples: string[];
+  review?: string;
+  exercise?: string;
+} {
+  const lessonItems = extractLessonItems(items);
+  const firstLesson = lessonItems[0] ?? null;
+
+  const title =
+    getString(firstLesson?.title) ??
+    getString(firstLesson?.name) ??
+    getString(firstLesson?.label) ??
+    firstStudy.topicKey ??
+    "Lição do dia";
+
+  const content =
+    getString(firstLesson?.content) ??
+    getString(firstLesson?.message) ??
+    getString(firstLesson?.text) ??
+    firstStudy.text;
+
+  const examples = firstLesson ? extractStringArray(firstLesson.examples) : [];
+  const review = getString(firstLesson?.review) ?? firstStudy.meaning;
+  const exercise = getString(firstLesson?.exercise);
+
+  return {
+    title,
+    content,
+    examples,
+    review,
+    exercise,
+  };
+}
+
+function formatWhatsAppLessonMessage(input: {
+  theme?: string;
+  xp: number;
+  lesson: {
+    title: string;
+    content: string;
+    examples: string[];
+    review?: string;
+    exercise?: string;
+  };
+}): string {
+  const lines: string[] = [
+    `Tema: ${input.theme ?? input.lesson.title}`,
+    `XP: ${input.xp}`,
+    "",
+    `Lição: ${input.lesson.title}`,
+    `Conteúdo: ${input.lesson.content}`,
+  ];
+
+  if (input.lesson.examples.length > 0) {
+    lines.push("", "Exemplos:");
+    for (const example of input.lesson.examples) {
+      lines.push(`- ${example}`);
+    }
+  }
+
+  if (input.lesson.review) {
+    lines.push("", `Revisão: ${input.lesson.review}`);
+  }
+
+  if (input.lesson.exercise) {
+    lines.push("", `Exercício: ${input.lesson.exercise}`);
+  }
+
+  return lines.join("\n");
 }
 
 function normalizeStudyEntry(value: unknown, index: number): StudyPackStudy[] {
@@ -240,6 +408,7 @@ export class StudyOrchestratorService {
           remotePackId: extractRemotePackIdFromPackItems(existingPack.items),
           studies: packItems,
           targetXp: existingPack.targetXp,
+          rawItems: existingPack.items,
         };
       }
     }
@@ -257,6 +426,7 @@ export class StudyOrchestratorService {
       remotePackId: result.remotePackId ?? null,
       studies,
       targetXp: result.pack.targetXp,
+      rawItems: result.pack.items,
     };
   }
 
@@ -357,6 +527,15 @@ export class StudyOrchestratorService {
       return null;
     }
     const firstItem = pack.studies[0] ?? null;
+    const lessonMessage = formatWhatsAppLessonMessage({
+      theme: extractPackTitle(pack.rawItems, firstItem) ?? firstItem?.topicKey ?? "Lição do dia",
+      xp: pack.targetXp,
+      lesson: extractLessonMessageParts(pack.rawItems, firstItem ?? {
+        itemId: "lesson",
+        text: "Conteúdo da lição indisponível.",
+        meaning: "",
+      }),
+    });
 
     await prisma.dailyStudyPack.update({
       where: {
@@ -399,13 +578,7 @@ export class StudyOrchestratorService {
     }
 
     return {
-      replyText: [
-        "Seu primeiro estudo está pronto:",
-        "",
-        `1. ${formatStudyPrompt(firstItem)}`,
-        "",
-        "Responda com o que você entendeu.",
-      ].join("\n"),
+      replyText: lessonMessage,
       packId: pack.packId,
       itemId: firstItem.itemId,
     };
