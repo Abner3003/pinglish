@@ -42,6 +42,10 @@ type StudyPackStudy = {
   topicKey?: string;
   source: "due_review" | "reinforcement" | "new_content" | "remote";
   order: number;
+  type: LearningItemType;
+  difficulty?: number;
+  tags?: string[];
+  metadata?: Prisma.JsonValue;
 };
 
 type LearningStateRecord = {
@@ -185,6 +189,14 @@ function resolveLessonResult(quality: AnswerQuality | undefined): LessonResult {
   }
 
   return "unclear";
+}
+
+function normalizeLearningItemType(value: unknown): LearningItemType {
+  if (value === "LEXICAL_CHUNK" || value === "PATTERN" || value === "EXAMPLE" || value === "MICRO_LESSON") {
+    return value;
+  }
+
+  return "EXAMPLE";
 }
 
 function resolveDifficultyLabel(difficulty: number | null | undefined): string {
@@ -515,6 +527,46 @@ export class LearningEngineService {
     });
 
     const event = await prisma.$transaction(async (tx) => {
+      const profile = await tx.learningProfile.findUnique({
+        where: { userId: input.userId },
+        select: {
+          tenantId: true,
+        },
+      });
+
+      const tenantId = profile?.tenantId ?? (await resolveDefaultTenantId());
+      if (!tenantId) {
+        throw new Error("Default tenant not found while recording study event");
+      }
+      const existingItem = await tx.learningItem.findUnique({
+        where: {
+          id: input.itemId,
+        },
+        select: {
+          id: true,
+        },
+      });
+
+      if (!existingItem) {
+        await tx.learningItem.create({
+          data: {
+            id: input.itemId,
+            tenantId,
+            type: "EXAMPLE",
+            text: input.itemId,
+            meaning: input.itemId,
+            difficulty: 1,
+            tags: [],
+            prerequisiteItemIds: [],
+            relatedItemIds: [],
+            metadata: {
+              topicKey: input.itemId,
+              source: "study_event_fallback",
+            },
+          },
+        });
+      }
+
       const createdEvent = await tx.studyEvent.create({
         data: {
           userId: input.userId,
@@ -966,6 +1018,9 @@ export class LearningEngineService {
     const fetchedPack = (await studyPackProviderService.getPackById(mountResult.remotePackId)) ?? mountResult;
     const studies = this.normalizeRemoteStudies(fetchedPack.studies);
     const targetXp = fetchedPack.targetXp ?? Math.max(studies.length * 10, 0);
+
+    await this.syncRemoteStudiesToTenant(tenantId, studies);
+
     const snapshot = {
       provider: "external-study-service",
       remotePackId: mountResult.remotePackId,
@@ -1402,6 +1457,9 @@ export class LearningEngineService {
     topicKey?: string;
     topic?: string;
     concept?: string;
+    type?: string;
+    difficulty?: number;
+    tags?: string[];
     metadata?: unknown;
   }>): StudyPackStudy[] {
     return studies.flatMap((study, index) => {
@@ -1430,9 +1488,57 @@ export class LearningEngineService {
           topicKey,
           source: "remote",
           order: study.order ?? study.position ?? index + 1,
+          type: normalizeLearningItemType(study.type ?? study.kind),
+          difficulty: typeof study.difficulty === "number" ? study.difficulty : undefined,
+          tags: Array.isArray(study.tags) ? study.tags.filter((tag): tag is string => typeof tag === "string") : undefined,
+          metadata: study.metadata as Prisma.JsonValue | undefined,
         },
       ];
     });
+  }
+
+  private async syncRemoteStudiesToTenant(
+    tenantId: string | null,
+    studies: StudyPackStudy[],
+  ): Promise<void> {
+    if (!tenantId || studies.length === 0) {
+      return;
+    }
+
+    for (const study of studies) {
+      await prisma.learningItem.upsert({
+        where: {
+          id: study.itemId,
+        },
+        create: {
+          id: study.itemId,
+          tenantId,
+          type: study.type,
+          text: study.text,
+          meaning: study.meaning,
+          difficulty: study.difficulty ?? 1,
+          tags: study.tags ?? [],
+          prerequisiteItemIds: [],
+          relatedItemIds: [],
+          metadata: study.metadata ?? {
+            topicKey: study.topicKey ?? study.itemId,
+            source: "remote",
+          },
+        },
+        update: {
+          tenantId,
+          type: study.type,
+          text: study.text,
+          meaning: study.meaning,
+          difficulty: study.difficulty ?? 1,
+          tags: study.tags ?? [],
+          metadata: study.metadata ?? {
+            topicKey: study.topicKey ?? study.itemId,
+            source: "remote",
+          },
+        },
+      });
+    }
   }
 }
 
