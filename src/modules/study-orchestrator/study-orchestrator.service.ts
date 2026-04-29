@@ -45,6 +45,7 @@ type PackResult = {
   remotePackId: string | null;
   studies: StudyPackStudy[];
   targetXp: number;
+  reviewCount: number;
   rawItems: Prisma.JsonValue;
 };
 
@@ -304,16 +305,23 @@ function normalizeLessonDifficultyFeedback(value: string): LessonDifficultyFeedb
   return null;
 }
 
-function resolveFeedbackSpacingHours(feedback: LessonDifficultyFeedback | null): number {
-  switch (feedback) {
+function resolveFeedbackSpacingMinutes(input: {
+  feedback: LessonDifficultyFeedback | null;
+  reviewCount: number;
+}): number {
+  if (input.reviewCount === 0) {
+    return 5;
+  }
+
+  switch (input.feedback) {
     case "easy":
-      return 12;
+      return 36 * 60;
     case "medium":
-      return 6;
+      return 90;
     case "hard":
-      return 2;
+      return 20;
     default:
-      return 6;
+      return 90;
   }
 }
 
@@ -343,8 +351,22 @@ function feedbackQuality(feedback: LessonDifficultyFeedback | null): number {
   }
 }
 
-function formatHoursLabel(hours: number): string {
-  return hours === 1 ? "1 hora" : `${hours} horas`;
+function formatMinutesLabel(minutes: number): string {
+  if (minutes < 60) {
+    return minutes === 1 ? "1 minuto" : `${minutes} minutos`;
+  }
+
+  if (minutes % 60 === 0) {
+    const hours = minutes / 60;
+    return hours === 1 ? "1 hora" : `${hours} horas`;
+  }
+
+  const hours = Math.floor(minutes / 60);
+  const mins = minutes % 60;
+  const hoursLabel = hours === 1 ? "1 hora" : `${hours} horas`;
+  const minsLabel = mins === 1 ? "1 minuto" : `${mins} minutos`;
+
+  return `${hoursLabel} e ${minsLabel}`;
 }
 
 function buildLessonItemView(
@@ -571,6 +593,7 @@ export class StudyOrchestratorService {
           id: true,
           items: true,
           targetXp: true,
+          reviewCount: true,
         },
       });
 
@@ -581,6 +604,7 @@ export class StudyOrchestratorService {
           remotePackId: extractRemotePackIdFromPackItems(existingPack.items),
           studies: packItems,
           targetXp: existingPack.targetXp,
+          reviewCount: existingPack.reviewCount,
           rawItems: existingPack.items,
         };
       }
@@ -599,6 +623,7 @@ export class StudyOrchestratorService {
       remotePackId: result.remotePackId ?? null,
       studies,
       targetXp: result.pack.targetXp,
+      reviewCount: result.pack.reviewCount,
       rawItems: result.pack.items,
     };
   }
@@ -945,9 +970,12 @@ export class StudyOrchestratorService {
     }
 
     const feedback = normalizeLessonDifficultyFeedback(input.text);
-    const spacingHours = resolveFeedbackSpacingHours(feedback);
+    const spacingMinutes = resolveFeedbackSpacingMinutes({
+      feedback,
+      reviewCount: pack.reviewCount,
+    });
     const feedbackLabelValue = feedbackLabel(feedback);
-    const nextReviewAt = addHours(now, spacingHours);
+    const nextReviewAt = new Date(now.getTime() + spacingMinutes * 60 * 1000);
     const previousItem = pack.studies[currentIndex - 1] ?? currentItem;
 
     await learningEngineService.recordStudyEvent({
@@ -961,10 +989,11 @@ export class StudyOrchestratorService {
     });
 
     const retryMessage = joinNonEmptyBlocks([
-      `Entendi: ${feedbackLabelValue}.`,
-      `Vou ajustar o próximo review para daqui a ${formatHoursLabel(spacingHours)}.`,
+      pack.reviewCount === 0
+        ? "Fechado. A próxima revisão vai acontecer em 5 minutos para manter o engajamento."
+        : `Entendi: ${feedbackLabelValue}. Vou ajustar o próximo review para daqui a ${formatMinutesLabel(spacingMinutes)}.`,
       "Seu pack terminou por agora.",
-      `Vou reagendar esse mesmo pack para daqui a ${formatHoursLabel(spacingHours)}.`,
+      `Vou reagendar esse mesmo pack para daqui a ${formatMinutesLabel(spacingMinutes)}.`,
     ]);
 
     await prisma.userChannel.update({
@@ -997,6 +1026,7 @@ export class StudyOrchestratorService {
         itemId: previousItem.itemId,
         feedback: feedbackLabelValue,
         nextReviewAt: nextReviewAt.toISOString(),
+        reviewCount: pack.reviewCount,
         awaitingStudyReply: false,
       },
       "[study-response] scheduled review",
