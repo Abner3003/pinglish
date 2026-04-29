@@ -610,6 +610,8 @@ function summarizeResponseBody(body: unknown): Record<string, unknown> {
 
 export class StudyPackProviderService {
   buildLessonGenerationPayload(input: RemoteStudyPackInput): Record<string, unknown> {
+    const educationalApproach = input.educationalApproach ?? null;
+
     return {
       userId: input.userId,
       tenantId: input.tenantId ?? null,
@@ -617,8 +619,8 @@ export class StudyPackProviderService {
       interests: input.interests,
       targetLanguage: input.targetLanguage ?? null,
       nativeLanguage: input.nativeLanguage ?? null,
-      educationalApproach: input.educationalApproach ?? null,
-      directives: input.educationalApproach ?? null,
+      educationalApproach,
+      directives: educationalApproach,
       firstItemType: input.firstItemType ?? null,
       exerciseStyle: input.exerciseStyle ?? null,
     };
