@@ -42,9 +42,22 @@ type HandleInboundResult =
 
 type PackResult = {
   packId: string;
+  remotePackId: string | null;
   studies: StudyPackStudy[];
   targetXp: number;
 };
+
+function extractRemotePackIdFromPackItems(items: Prisma.JsonValue): string | null {
+  if (!items || typeof items !== "object" || Array.isArray(items)) {
+    return null;
+  }
+
+  const record = items as Record<string, unknown>;
+
+  return typeof record.remotePackId === "string" && record.remotePackId.trim().length > 0
+    ? record.remotePackId
+    : null;
+}
 
 type CurrentStudyContext = {
   userId: string;
@@ -224,6 +237,7 @@ export class StudyOrchestratorService {
         const packItems = normalizeStudies(existingPack.items);
         return {
           packId: existingPack.id,
+          remotePackId: extractRemotePackIdFromPackItems(existingPack.items),
           studies: packItems,
           targetXp: existingPack.targetXp,
         };
@@ -240,6 +254,7 @@ export class StudyOrchestratorService {
 
     return {
       packId: result.pack.id,
+      remotePackId: result.remotePackId ?? null,
       studies,
       targetXp: result.pack.targetXp,
     };
@@ -477,7 +492,7 @@ export class StudyOrchestratorService {
 
     const analysisRequest = studyPackProviderService.buildReviewRequestPayload({
       userId: input.userId,
-      packageId: pack.packId,
+      packageId: pack.remotePackId ?? pack.packId,
       packItemId: currentItem.itemId,
       mode: reviewMode,
       session_id: pack.packId,

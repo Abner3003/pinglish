@@ -1025,6 +1025,7 @@ export class LearningEngineService {
       pack,
       profile: learningProfile,
       studies,
+      remotePackId: mountResult.remotePackId,
     };
   }
 
