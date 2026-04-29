@@ -5,7 +5,6 @@ import { metaWhatsAppService } from "../modules/meta-whatsapp/meta-whatsapp.modu
 import { studyPackProviderService } from "../modules/study-pack-provider/study-pack-provider.module.js";
 import { resolveDefaultTenantId } from "../modules/tenants/default-tenant.service.js";
 
-type Logger = Pick<typeof console, "info" | "warn" | "error">;
 
 type GapReinforcementRecipient = {
   userId: string;
