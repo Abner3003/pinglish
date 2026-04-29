@@ -106,21 +106,35 @@ function normalizeStudies(items: Prisma.JsonValue): StudyPackStudy[] {
   return [];
 }
 
-function unwrapPackPayload(items: Prisma.JsonValue): Record<string, unknown> | null {
+function unwrapRemotePackPayload(items: Prisma.JsonValue): Record<string, unknown> | null {
   if (!isRecord(items)) {
     return null;
   }
 
-  if (
-    isRecord(items.raw) &&
-    getString(items.mode) === "pack" &&
-    isRecord(items.data)
-  ) {
+  if (getString(items.mode) === "pack" && isRecord(items.data)) {
     return items.data;
   }
 
-  if (isRecord(items.data) && getString(items.mode) === "pack") {
-    return items.data;
+  return null;
+}
+
+function extractPackPayload(items: Prisma.JsonValue): Record<string, unknown> | null {
+  if (!isRecord(items)) {
+    return null;
+  }
+
+  if (isRecord(items.raw)) {
+    const rawPayload = unwrapRemotePackPayload(items.raw);
+
+    if (rawPayload) {
+      return rawPayload;
+    }
+  }
+
+  const directPayload = unwrapRemotePackPayload(items);
+
+  if (directPayload) {
+    return directPayload;
   }
 
   return items;
@@ -130,7 +144,9 @@ function getString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
-
+function getNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
 
 function extractStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) {
@@ -141,7 +157,7 @@ function extractStringArray(value: unknown): string[] {
 }
 
 function extractPackTitle(items: Prisma.JsonValue, fallbackStudy?: StudyPackStudy | null): string | undefined {
-  const payload = unwrapPackPayload(items);
+  const payload = extractPackPayload(items);
 
   if (payload) {
     const candidates = [
@@ -165,7 +181,7 @@ function extractPackTitle(items: Prisma.JsonValue, fallbackStudy?: StudyPackStud
 }
 
 function extractLessonItems(items: Prisma.JsonValue): Record<string, unknown>[] {
-  const payload = unwrapPackPayload(items);
+  const payload = extractPackPayload(items);
 
   if (!payload) {
     return [];
@@ -173,6 +189,7 @@ function extractLessonItems(items: Prisma.JsonValue): Record<string, unknown>[] 
 
   const candidates = [
     payload.items,
+    isRecord(payload.data) ? payload.data.items : undefined,
     payload.studies,
     payload.content,
     isRecord(payload.lesson)
@@ -198,77 +215,157 @@ function extractLessonItems(items: Prisma.JsonValue): Record<string, unknown>[] 
   return [];
 }
 
-function extractLessonMessageParts(items: Prisma.JsonValue, firstStudy: StudyPackStudy): {
+function extractLessonItemByStudy(
+  items: Prisma.JsonValue,
+  study: StudyPackStudy | null,
+): Record<string, unknown> | null {
+  const lessonItems = extractLessonItems(items);
+
+  if (lessonItems.length === 0) {
+    return null;
+  }
+
+  if (!study) {
+    return lessonItems[0] ?? null;
+  }
+
+  const normalizedStudyId = study.itemId.trim();
+
+  return (
+    lessonItems.find((entry) => {
+      const entryId =
+        getString(entry.id) ??
+        getString(entry.itemId) ??
+        getString(entry.learningItemId) ??
+        getString(entry.studyId);
+
+      if (entryId && entryId === normalizedStudyId) {
+        return true;
+      }
+
+      const order = getNumber(entry.order) ?? getNumber(entry.position);
+      return order !== undefined && order === study.order;
+    }) ?? lessonItems[0] ?? null
+  );
+}
+
+function normalizeLessonText(value: unknown, fallback = ""): string {
+  if (typeof value !== "string") {
+    return fallback;
+  }
+
+  return value.trim() || fallback;
+}
+
+function buildLessonItemView(
+  entry: Record<string, unknown> | null,
+  fallbackStudy: StudyPackStudy | null,
+): {
   title: string;
   content: string;
   examples: string[];
-  review?: string;
-  exercise?: string;
+  exercise: string;
 } {
-  const lessonItems = extractLessonItems(items);
-  const firstLesson = lessonItems[0] ?? null;
-
-  const title =
-    getString(firstLesson?.title) ??
-    getString(firstLesson?.name) ??
-    getString(firstLesson?.label) ??
-    firstStudy.topicKey ??
-    "Lição do dia";
-
-  const content =
-    getString(firstLesson?.content) ??
-    getString(firstLesson?.message) ??
-    getString(firstLesson?.text) ??
-    firstStudy.text;
-
-  const examples = firstLesson ? extractStringArray(firstLesson.examples) : [];
-  const review = getString(firstLesson?.review) ?? firstStudy.meaning;
-  const exercise = getString(firstLesson?.exercise);
-
   return {
-    title,
-    content,
-    examples,
-    review,
-    exercise,
+    title:
+      normalizeLessonText(getString(entry?.title) ?? getString(entry?.name) ?? getString(entry?.label), fallbackStudy?.text ?? "Lição"),
+    content:
+      normalizeLessonText(
+        getString(entry?.content) ??
+          getString(entry?.message) ??
+          getString(entry?.text) ??
+          fallbackStudy?.meaning ??
+          fallbackStudy?.text,
+        "",
+      ),
+    examples: extractStringArray(entry?.examples),
+    exercise: normalizeLessonText(getString(entry?.exercise), ""),
   };
 }
 
-function formatWhatsAppLessonMessage(input: {
-  theme?: string;
-  xp: number;
-  lesson: {
+function extractExpectedAnswer(
+  entry: Record<string, unknown> | null,
+  fallbackStudy: StudyPackStudy | null,
+): string {
+  return normalizeLessonText(
+    getString(entry?.answer) ??
+      getString(entry?.solution) ??
+      getString(entry?.expectedAnswer) ??
+      getString(entry?.expected_answer) ??
+      getString(entry?.correctAnswer) ??
+      getString(entry?.correct_answer) ??
+      fallbackStudy?.meaning ??
+      fallbackStudy?.text,
+    "",
+  );
+}
+
+function buildLessonMessage(pack: { title: string }, item: {
+  content: string;
+  examples?: string[] | null;
+  exercise?: string | null;
+}): string {
+  const examples = item.examples?.length
+    ? `\n\nExemplos:\n${item.examples.map((example) => `• ${example}`).join("\n")}`
+    : "";
+
+  return `
+🎯 ${pack.title}
+
+${item.content}
+${examples}
+
+🧠 Prática:
+${item.exercise ?? ""}
+
+Responda aqui no WhatsApp 👇
+`.trim();
+}
+
+function buildNextItemMessage(pack: { title: string }, item: {
+  title: string;
+  content: string;
+  exercise?: string | null;
+}): string {
+  return `
+📌 Próxima atividade: ${item.title}
+
+${item.content}
+
+🧠 ${item.exercise ?? ""}
+
+Responda aqui 👇
+`.trim();
+}
+
+function buildCorrectionMessage(input: {
+  currentItem: {
     title: string;
     content: string;
-    examples: string[];
-    review?: string;
-    exercise?: string;
+    examples?: string[] | null;
+    exercise?: string | null;
   };
+  studentAnswer: string;
+  expectedAnswer: string;
 }): string {
-  const lines: string[] = [
-    `Tema: ${input.theme ?? input.lesson.title}`,
-    `XP: ${input.xp}`,
-    "",
-    `Lição: ${input.lesson.title}`,
-    `Conteúdo: ${input.lesson.content}`,
-  ];
+  const examples = input.currentItem.examples?.length
+    ? `\n\nExemplos:\n${input.currentItem.examples.map((example) => `• ${example}`).join("\n")}`
+    : "";
 
-  if (input.lesson.examples.length > 0) {
-    lines.push("", "Exemplos:");
-    for (const example of input.lesson.examples) {
-      lines.push(`- ${example}`);
-    }
-  }
+  return `
+Boa tentativa 👌
 
-  if (input.lesson.review) {
-    lines.push("", `Revisão: ${input.lesson.review}`);
-  }
+A forma mais natural seria:
 
-  if (input.lesson.exercise) {
-    lines.push("", `Exercício: ${input.lesson.exercise}`);
-  }
+✅ ${input.expectedAnswer}
 
-  return lines.join("\n");
+Esse chunk funciona assim:
+
+${input.currentItem.content}
+${examples}
+
+Próximo desafio 👇
+`.trim();
 }
 
 function normalizeStudyEntry(value: unknown, index: number): StudyPackStudy[] {
@@ -399,7 +496,7 @@ export class StudyOrchestratorService {
         },
       });
 
-      if (existingPack) {
+    if (existingPack) {
         const packItems = normalizeStudies(existingPack.items);
         return {
           packId: existingPack.id,
@@ -525,15 +622,19 @@ export class StudyOrchestratorService {
       return null;
     }
     const firstItem = pack.studies[0] ?? null;
-    const lessonMessage = formatWhatsAppLessonMessage({
-      theme: extractPackTitle(pack.rawItems, firstItem) ?? firstItem?.topicKey ?? "Lição do dia",
-      xp: pack.targetXp,
-      lesson: extractLessonMessageParts(pack.rawItems, firstItem ?? {
-        itemId: "lesson",
-        text: "Conteúdo da lição indisponível.",
-        meaning: "",
-      }),
-    });
+    const packTitle = extractPackTitle(pack.rawItems, firstItem) ?? firstItem?.topicKey ?? "Lição do dia";
+    const firstRawItem = extractLessonItemByStudy(pack.rawItems, firstItem);
+    const lessonMessage = buildLessonMessage(
+      { title: packTitle },
+      buildLessonItemView(
+        firstRawItem,
+        firstItem ?? {
+          itemId: "lesson",
+          text: "Lição indisponível.",
+          meaning: "",
+        },
+      ),
+    );
 
     await prisma.dailyStudyPack.update({
       where: {
@@ -646,6 +747,7 @@ export class StudyOrchestratorService {
         }),
       };
     }
+    const packTitle = extractPackTitle(pack.rawItems, currentItem) ?? currentItem.topicKey ?? "Lição do dia";
 
     const conceptState = await prisma.userConceptState.findUnique({
       where: {
@@ -723,6 +825,15 @@ export class StudyOrchestratorService {
     );
 
     if (nextItem) {
+      const currentRawItem = extractLessonItemByStudy(pack.rawItems, currentItem);
+      const nextRawItem = extractLessonItemByStudy(pack.rawItems, nextItem);
+      const expectedAnswer =
+        extractExpectedAnswer(currentRawItem, currentItem) ||
+        analysis.data.expected_answer ||
+        analysis.data.alternative_answers[0] ||
+        currentItem.meaning ||
+        currentItem.text;
+
       await prisma.userChannel.update({
         where: { userId: input.userId },
         data: {
@@ -733,19 +844,19 @@ export class StudyOrchestratorService {
         },
       });
 
+      const correctionMessage = buildCorrectionMessage({
+        currentItem: buildLessonItemView(currentRawItem, currentItem),
+        studentAnswer: input.text,
+        expectedAnswer,
+      });
+      const nextMessage = buildNextItemMessage(
+        { title: extractPackTitle(pack.rawItems, nextItem) ?? packTitle },
+        buildLessonItemView(nextRawItem, nextItem),
+      );
+
       return {
         kind: "study",
-        replyText: [
-          analysis.data.feedback || "Resposta registrada.",
-          "",
-          analysis.data.corrections.length > 0
-            ? analysis.data.corrections.join("\n")
-            : "Vamos para o próximo item.",
-          "",
-          `Próximo:`,
-          "",
-          `${currentIndex + 2}. ${formatStudyPrompt(nextItem)}`,
-        ].join("\n"),
+        replyText: [correctionMessage, nextMessage].join("\n\n"),
         answerQuality: scoreToQuality(analysis.data.score ?? 0),
         confidence: analysis.data.score ? Math.min(1, Math.max(0.3, analysis.data.score / 100)) : 0.4,
         reason: analysis.data.source,
@@ -755,8 +866,20 @@ export class StudyOrchestratorService {
       };
     }
 
+    const currentRawItem = extractLessonItemByStudy(pack.rawItems, currentItem);
+    const expectedAnswer =
+      extractExpectedAnswer(currentRawItem, currentItem) ||
+      analysis.data.expected_answer ||
+      analysis.data.alternative_answers[0] ||
+      currentItem.meaning ||
+      currentItem.text;
+    const correctionMessage = buildCorrectionMessage({
+      currentItem: buildLessonItemView(currentRawItem, currentItem),
+      studentAnswer: input.text,
+      expectedAnswer,
+    });
     const retryMessage = [
-      analysis.data.feedback || "Resposta registrada.",
+      correctionMessage,
       "",
       "Seu pack terminou por agora.",
       "Vou reagendar esse mesmo pack para daqui a 2 horas.",

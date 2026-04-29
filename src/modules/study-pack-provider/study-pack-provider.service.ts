@@ -436,7 +436,7 @@ async function buildFallbackAnalysis(input: ReviewRequestPayload): Promise<Revie
     },
   });
 
-  const expectedAnswer = study?.text ?? item?.text ?? item?.meaning ?? "";
+  const expectedAnswer = study?.meaning ?? study?.text ?? item?.meaning ?? item?.text ?? "";
   const classifierResult = learningResponseClassifier.classify({
     userText: input.userResponse,
     expectedText: expectedAnswer,
