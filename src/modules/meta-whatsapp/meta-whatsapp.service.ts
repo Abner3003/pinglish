@@ -195,11 +195,11 @@ function resolveTargetLanguage(value: string): string {
 }
 
 function buildProfessionQuestion(): string {
-  return "4. Qual é a sua profissão?";
+  return "4. Qual é a sua profissão hoje?";
 }
 
 function buildLevelQuestion(): string {
-  return "4. Qual seu nível no idioma que quer aprender?";
+  return "4. Qual é o seu nível no idioma que quer aprender?";
 }
 
 function buildLanguageQuestion(): string {
@@ -209,11 +209,11 @@ function buildLanguageQuestion(): string {
 function buildOnboardingQuestion(step: 2 | 3 | 4 | 5 | 6 | 7, goal?: LearningGoal | null): string {
   switch (step) {
     case 2:
-      return "1. Me fale do que você gosta e se acha que o inglês é uma necessidade para você.";
+      return "1. Me conte do que você gosta e se aprender esse idioma é uma necessidade para você.";
     case 3:
-      return "2. Quais temas você prefere estudar? (ex: trabalho, rotina, tecnologia)";
+      return "2. Quais temas você prefere estudar? (ex.: trabalho, rotina, tecnologia)";
     case 4:
-      return "3. Qual é seu objetivo com o idioma?";
+      return "3. Qual é o seu objetivo com o idioma?";
     case 5:
       return goal === LearningGoal.WORK ? buildProfessionQuestion() : buildLevelQuestion();
     case 6:
