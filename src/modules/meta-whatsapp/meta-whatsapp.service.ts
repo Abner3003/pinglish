@@ -7,6 +7,7 @@ import { prisma } from "../../lib/prisma.js";
 import { env } from "../../config/env.js";
 import { resolveDefaultTenantId } from "../tenants/default-tenant.service.js";
 import { studyOrchestratorService } from "../study-orchestrator/study-orchestrator.module.js";
+import { studyPackProviderService } from "../study-pack-provider/study-pack-provider.module.js";
 
 type Logger = Pick<typeof console, "info" | "warn" | "error">;
 
@@ -238,6 +239,39 @@ function mergeStrings(current: string[], next: string[]): string[] {
 
 export class MetaWhatsAppService {
   constructor(private readonly logger: Logger = console) {}
+
+  private async normalizeReceivedLevel(input: {
+    rawLevel: string;
+    tenantId: string | null;
+    targetLanguage?: string | null;
+    nativeLanguage?: string | null;
+  }): Promise<string> {
+    const normalized = await studyPackProviderService.normalizeLevel({
+      userLevel: input.rawLevel,
+      tenantId: input.tenantId,
+      targetLanguage: input.targetLanguage ?? null,
+      nativeLanguage: input.nativeLanguage ?? null,
+    });
+
+    const normalizedLevel = normalized?.data.normalizedLevel ?? resolveLevel(input.rawLevel);
+
+    this.logger.info(
+      {
+        scope: "meta-whatsapp",
+        step: "normalizeLevel",
+        rawLevel: input.rawLevel,
+        normalizedLevel,
+        source: normalized?.data.source ?? "local-fallback",
+        confidence: normalized?.data.confidence ?? null,
+        tenantId: input.tenantId,
+        targetLanguage: input.targetLanguage ?? null,
+        nativeLanguage: input.nativeLanguage ?? null,
+      },
+      "[meta-whatsapp] level normalized",
+    );
+
+    return normalizedLevel;
+  }
 
   private async sendTypingIndicator(replyToMessageId: string): Promise<void> {
     const integration = await this.getActiveIntegration();
@@ -852,9 +886,17 @@ export class MetaWhatsAppService {
         break;
       }
       case 5: {
+        const tenantId = await resolveDefaultTenantId();
+        const normalizedLevel = await this.normalizeReceivedLevel({
+          rawLevel: text,
+          tenantId,
+          targetLanguage: null,
+          nativeLanguage: "PT-BR",
+        });
+
         await this.upsertPartialKycUser({
           userId: user.id,
-          languageLevel: resolveLevel(text),
+          languageLevel: normalizedLevel,
         });
 
         await this.sendReply(user.phone, buildOnboardingQuestion(6), message.messageId);

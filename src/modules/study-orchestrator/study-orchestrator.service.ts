@@ -521,6 +521,9 @@ export class StudyOrchestratorService {
       };
     }
 
+    const now = new Date();
+    const earnedXp = analysis.data.xp ?? 0;
+
     await learningEngineService.recordStudyEvent({
       userId: input.userId,
       itemId: currentItem.itemId,
@@ -533,6 +536,20 @@ export class StudyOrchestratorService {
 
     const currentIndex = pack.studies.findIndex((study) => study.itemId === currentItem.itemId);
     const nextItem = pack.studies[currentIndex + 1] ?? null;
+
+    console.info(
+      {
+        scope: "study-orchestrator",
+        step: "handleOptInMessage",
+        userId: input.userId,
+        packId: pack.remotePackId ?? pack.packId,
+        itemId: currentItem.itemId,
+        xpEarned: earnedXp,
+        nextReviewAt: nextItem ? null : addHours(now, 2).toISOString(),
+        awaitingStudyReply: Boolean(nextItem),
+      },
+      "[study-response] processed",
+    );
 
     if (nextItem) {
       await prisma.userChannel.update({
@@ -567,7 +584,6 @@ export class StudyOrchestratorService {
       };
     }
 
-    const now = new Date();
     const retryMessage = [
       analysis.data.feedback || "Resposta registrada.",
       "",
@@ -596,16 +612,30 @@ export class StudyOrchestratorService {
       },
     });
 
-    return {
-      kind: "study",
-      replyText: retryMessage,
-      answerQuality: scoreToQuality(analysis.data.score ?? 0),
-      confidence: analysis.data.score ? Math.min(1, Math.max(0.3, analysis.data.score / 100)) : 0.4,
-      reason: analysis.data.source,
-      packId: pack.packId,
-      itemId: currentItem.itemId,
-      awaitingStudyReply: false,
-    };
+    console.info(
+      {
+        scope: "study-orchestrator",
+        step: "handleOptInMessage",
+        userId: input.userId,
+        packId: pack.remotePackId ?? pack.packId,
+        itemId: currentItem.itemId,
+        xpEarned: earnedXp,
+        nextReviewAt: addHours(now, 2).toISOString(),
+        awaitingStudyReply: false,
+      },
+      "[study-response] scheduled review",
+    );
+
+      return {
+        kind: "study",
+        replyText: retryMessage,
+        answerQuality: scoreToQuality(analysis.data.score ?? 0),
+        confidence: analysis.data.score ? Math.min(1, Math.max(0.3, analysis.data.score / 100)) : 0.4,
+        reason: analysis.data.source,
+        packId: pack.packId,
+        itemId: currentItem.itemId,
+        awaitingStudyReply: false,
+      };
   }
 
   async handleOptInConversation(input: {

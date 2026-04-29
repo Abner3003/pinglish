@@ -10,6 +10,11 @@ export type RemoteStudyPackInput = {
   tenantId: string | null;
   level: StudyPackLevel;
   interests: string[];
+  targetLanguage?: string | null;
+  nativeLanguage?: string | null;
+  educationalApproach?: Record<string, unknown> | null;
+  firstItemType?: string | null;
+  exerciseStyle?: string | null;
   mode: "teach" | "drill" | "remediate";
   session_id: string;
   lesson_goal: string;
@@ -17,6 +22,13 @@ export type RemoteStudyPackInput = {
   topic: string;
   language: string;
   context?: Record<string, unknown>;
+};
+
+export type NormalizeLevelInput = {
+  userLevel: string;
+  tenantId: string | null;
+  targetLanguage?: string | null;
+  nativeLanguage?: string | null;
 };
 
 export type RemoteStudyItem = {
@@ -80,6 +92,19 @@ export type ReviewRequestPayload = {
   packItemId: string;
   userResponse: string;
   mode?: "teach" | "drill" | "remediate";
+};
+
+export type NormalizeLevelResult = {
+  ok: true;
+  mode: "level_normalization";
+  data: {
+    rawLevel: string;
+    normalizedLevel: string;
+    source: "openai" | "fallback";
+    confidence: number;
+    reason: string;
+    matchedLabel: string;
+  };
 };
 
 type JsonRecord = Record<string, unknown>;
@@ -242,6 +267,32 @@ function extractTargetXp(payload: unknown): number | undefined {
   }
 
   return undefined;
+}
+
+function extractNormalizedLevel(payload: unknown): NormalizeLevelResult["data"] | null {
+  if (!isRecord(payload)) {
+    return null;
+  }
+
+  const data = isRecord(payload.data) ? payload.data : payload;
+  const rawLevel = getString(data.rawLevel) ?? getString(payload.rawLevel) ?? getString(payload.userLevel);
+  const normalizedLevel =
+    getString(data.normalizedLevel) ??
+    getString(payload.normalizedLevel) ??
+    getString(data.level);
+
+  if (!rawLevel || !normalizedLevel) {
+    return null;
+  }
+
+  return {
+    rawLevel,
+    normalizedLevel,
+    source: getString(data.source) === "fallback" ? "fallback" : "openai",
+    confidence: getNumber(data.confidence) ?? getNumber(payload.confidence) ?? 0,
+    reason: getString(data.reason) ?? getString(payload.reason) ?? "",
+    matchedLabel: getString(data.matchedLabel) ?? getString(payload.matchedLabel) ?? rawLevel,
+  };
 }
 
 function extractTopicKey(value: unknown): string | undefined {
@@ -514,14 +565,14 @@ function getPayloadSizeBytes(payload: unknown): number | null {
 }
 
 function logRemoteStudyCall(
-  step: "mountPack" | "getPackById" | "analyzeReviewResponse",
+  step: "mountPack" | "getPackById" | "analyzeReviewResponse" | "normalizeLevel",
   details: Record<string, unknown>,
 ): void {
   console.info({ scope: "study-pack-provider", step, ...details }, "[penglish-ai] request");
 }
 
 function logRemoteStudyResponse(
-  step: "mountPack" | "getPackById" | "analyzeReviewResponse",
+  step: "mountPack" | "getPackById" | "analyzeReviewResponse" | "normalizeLevel",
   details: Record<string, unknown>,
 ): void {
   console.info({ scope: "study-pack-provider", step, ...details }, "[penglish-ai] response");
@@ -564,6 +615,12 @@ export class StudyPackProviderService {
       tenantId: input.tenantId ?? null,
       level: input.level,
       interests: input.interests,
+      targetLanguage: input.targetLanguage ?? null,
+      nativeLanguage: input.nativeLanguage ?? null,
+      educationalApproach: input.educationalApproach ?? null,
+      directives: input.educationalApproach ?? null,
+      firstItemType: input.firstItemType ?? null,
+      exerciseStyle: input.exerciseStyle ?? null,
     };
   }
 
@@ -576,6 +633,86 @@ export class StudyPackProviderService {
       packItemId: input.packItemId,
       userResponse: input.user_answer,
     };
+  }
+
+  async normalizeLevel(input: NormalizeLevelInput): Promise<NormalizeLevelResult | null> {
+    if (!env.STUDY_PACK_SERVICE_BASE_URL) {
+      return null;
+    }
+
+    try {
+      const url = buildUrl(
+        env.STUDY_PACK_SERVICE_BASE_URL,
+        env.STUDY_PACK_SERVICE_NORMALIZE_LEVEL_PATH,
+      );
+      const payload = {
+        userLevel: input.userLevel,
+        tenantId: input.tenantId ?? null,
+        targetLanguage: input.targetLanguage ?? null,
+        nativeLanguage: input.nativeLanguage ?? null,
+      };
+      const startedAt = Date.now();
+
+      logRemoteStudyCall("normalizeLevel", {
+        url,
+        userLevel: input.userLevel,
+        tenantId: input.tenantId,
+        targetLanguage: input.targetLanguage ?? null,
+        nativeLanguage: input.nativeLanguage ?? null,
+        payloadSizeBytes: getPayloadSizeBytes(payload),
+      });
+
+      const response = await retryRemoteCall(async () => {
+        const result = await fetchJson(url, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(env.STUDY_PACK_SERVICE_TOKEN
+              ? { Authorization: `Bearer ${env.STUDY_PACK_SERVICE_TOKEN}` }
+              : {}),
+          },
+          body: JSON.stringify(payload),
+        });
+
+        if (!result.ok && shouldRetryStatus(result.status)) {
+          throw new Error(`Remote level normalization failed with status ${result.status}`);
+        }
+
+        return result;
+      });
+
+      const normalizedLevel = extractNormalizedLevel(response.body);
+
+      if (response.ok && normalizedLevel) {
+        logRemoteStudyResponse("normalizeLevel", {
+          ok: true,
+          status: response.status,
+          durationMs: Date.now() - startedAt,
+          userLevel: input.userLevel,
+          normalizedLevel: normalizedLevel.normalizedLevel,
+          source: normalizedLevel.source,
+          confidence: normalizedLevel.confidence,
+          matchedLabel: normalizedLevel.matchedLabel,
+        });
+
+        return {
+          ok: true,
+          mode: "level_normalization",
+          data: normalizedLevel,
+        };
+      }
+
+      logRemoteStudyResponse("normalizeLevel", {
+        ok: false,
+        status: response.status,
+        durationMs: Date.now() - startedAt,
+        userLevel: input.userLevel,
+      });
+    } catch (error) {
+      console.warn("[study-pack-provider] normalizeLevel failed", error);
+    }
+
+    return null;
   }
 
   async mountPack(input: RemoteStudyPackInput): Promise<RemoteStudyPackResult | null> {

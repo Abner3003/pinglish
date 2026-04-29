@@ -39,6 +39,7 @@ const EnvSchema = z.object({
   STUDY_PACK_SERVICE_MOUNT_PATH: z.string().min(1).default("/mountPack"),
   STUDY_PACK_SERVICE_GET_PACK_PATH: z.string().min(1).default("/getPackById"),
   STUDY_PACK_SERVICE_ANALYZE_PATH: z.string().min(1).default("/analyzePackItemResponse"),
+  STUDY_PACK_SERVICE_NORMALIZE_LEVEL_PATH: z.string().min(1).default("/normalizeLevel"),
   STUDY_PACK_SERVICE_TOKEN: z.string().min(1).optional(),
   DEFAULT_TENANT_NAME: z.string().min(1).default("Penglish"),
   DEFAULT_TENANT_SEGMENT: z.string().min(1).default("general"),

@@ -694,6 +694,22 @@ export class LearningEngineService {
 
       await this.recalculateProgression(tx, input.userId, occurredAt);
 
+      console.info(
+        {
+          scope: "learning-engine",
+          step: "recordStudyEvent",
+          userId: input.userId,
+          itemId: input.itemId,
+          packId: input.packId ?? null,
+          eventType: input.eventType,
+          xpEarned: createdEvent.xpEarned,
+          answerQuality: input.answerQuality ?? null,
+          isCorrect: input.isCorrect ?? null,
+          occurredAt: occurredAt.toISOString(),
+        },
+        "[study-event] recorded",
+      );
+
       return createdEvent;
     });
 
@@ -911,6 +927,22 @@ export class LearningEngineService {
     const journey = await prisma.userJourney.findUnique({
       where: { userId: input.userId },
     });
+    const tenantId =
+      input.tenantId ?? profile?.tenantId ?? (await resolveDefaultTenantId());
+    const tenant = tenantId
+      ? await prisma.tenant.findUnique({
+          where: {
+            id: tenantId,
+          },
+          select: {
+            id: true,
+            educationalApproach: true,
+            name: true,
+            segment: true,
+            description: true,
+          },
+        })
+      : null;
 
     const learningProfile: LearningProfileRecord | null = profile
       ? {
@@ -920,11 +952,9 @@ export class LearningEngineService {
           goal: profile.goal,
           interests: profile.interests,
         }
-      : null;
+        : null;
 
     const level = journey?.level ?? UserJourneyLevel.INICIANTE;
-    const tenantId =
-      input.tenantId ?? profile?.tenantId ?? (await resolveDefaultTenantId());
     const lessonContext = await this.resolvePrimaryLessonContext(input);
 
     if (!lessonContext) {
@@ -981,6 +1011,11 @@ export class LearningEngineService {
       tenantId,
       level,
       interests: learningProfile?.interests ?? [],
+      targetLanguage: learningProfile?.targetLanguage ?? null,
+      nativeLanguage: learningProfile?.nativeLanguage ?? null,
+      educationalApproach: (tenant?.educationalApproach as Record<string, unknown> | null) ?? null,
+      firstItemType: "lesson",
+      exerciseStyle: "sentence_completion",
       mode: lessonContext.mode,
       session_id: lessonContext.session_id,
       lesson_goal: lessonContext.lesson_goal,

@@ -10,6 +10,25 @@ const DEFAULT_SYSTEM_PROFESSIONAL = {
   phone: "+00000000000",
 };
 
+function buildDefaultEducationalApproach() {
+  return {
+    provider: "default",
+    name: env.DEFAULT_TENANT_NAME,
+    segment: env.DEFAULT_TENANT_SEGMENT,
+    autoCreated: true,
+    description:
+      "Abordagem lexical com chunks pequenos e atividades de completar frases, sempre usando o idioma-alvo escolhido pelo aluno.",
+    pedagogy: {
+      approach: "lexical_approach",
+      chunkSize: "small",
+      exerciseStyle: "sentence_completion",
+      firstItemType: "lesson",
+      instruction:
+        "Use the learner's target language. Teach with small lexical chunks and completion-style prompts. The first item must be a short lesson, not a pure exercise.",
+    },
+  };
+}
+
 async function ensureTenantHasSeedItems(tenantId: string): Promise<void> {
   await ensureSeedItemsForTenant(tenantId, prisma);
 }
@@ -45,12 +64,7 @@ async function createDefaultTenantIfPossible(): Promise<string | null> {
       name: env.DEFAULT_TENANT_NAME,
       description: "Tenant padrão da PEnglish",
       segment: env.DEFAULT_TENANT_SEGMENT,
-      educationalApproach: {
-        provider: "default",
-        name: env.DEFAULT_TENANT_NAME,
-        segment: env.DEFAULT_TENANT_SEGMENT,
-        autoCreated: true,
-      },
+      educationalApproach: buildDefaultEducationalApproach(),
     },
     select: {
       id: true,
@@ -78,6 +92,17 @@ export async function resolveDefaultTenantId(): Promise<string | null> {
   });
 
   if (existingTenant) {
+    await prisma.tenant.update({
+      where: {
+        id: existingTenant.id,
+      },
+      data: {
+        educationalApproach: buildDefaultEducationalApproach(),
+      },
+      select: {
+        id: true,
+      },
+    });
     cachedDefaultTenantId = existingTenant.id;
     await ensureTenantHasSeedItems(cachedDefaultTenantId);
     return cachedDefaultTenantId;
