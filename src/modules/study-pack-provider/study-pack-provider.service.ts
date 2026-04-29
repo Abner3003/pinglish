@@ -746,6 +746,7 @@ export class StudyPackProviderService {
           topic: input.topic,
           level: input.level,
           payload,
+          payloadJson: JSON.stringify(payload, null, 2),
           payloadSizeBytes: getPayloadSizeBytes(payload),
         });
 
