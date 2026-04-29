@@ -90,6 +90,8 @@ type BotReplyInput = {
   interests?: string[] | null;
 };
 
+type LessonDifficultyFeedback = "easy" | "medium" | "hard";
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -146,6 +148,14 @@ function getString(value: unknown): string | undefined {
 
 function getNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function normalizeText(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "");
 }
 
 function extractStringArray(value: unknown): string[] {
@@ -257,6 +267,86 @@ function normalizeLessonText(value: unknown, fallback = ""): string {
   return value.trim() || fallback;
 }
 
+function formatBulletList(values: string[]): string {
+  return values.map((value) => `• ${value}`).join("\n");
+}
+
+function joinNonEmptyBlocks(blocks: Array<string | null | undefined>): string {
+  return blocks.filter((block): block is string => typeof block === "string" && block.trim().length > 0).join("\n\n");
+}
+
+function normalizeLessonDifficultyFeedback(value: string): LessonDifficultyFeedback | null {
+  const normalized = normalizeText(value);
+
+  if (
+    normalized.includes("facil") ||
+    normalized.includes("easy")
+  ) {
+    return "easy";
+  }
+
+  if (
+    normalized.includes("medio") ||
+    normalized.includes("médio") ||
+    normalized.includes("medium")
+  ) {
+    return "medium";
+  }
+
+  if (
+    normalized.includes("dificil") ||
+    normalized.includes("difícil") ||
+    normalized.includes("hard")
+  ) {
+    return "hard";
+  }
+
+  return null;
+}
+
+function resolveFeedbackSpacingHours(feedback: LessonDifficultyFeedback | null): number {
+  switch (feedback) {
+    case "easy":
+      return 12;
+    case "medium":
+      return 6;
+    case "hard":
+      return 2;
+    default:
+      return 6;
+  }
+}
+
+function feedbackLabel(feedback: LessonDifficultyFeedback | null): string {
+  switch (feedback) {
+    case "easy":
+      return "fácil";
+    case "medium":
+      return "médio";
+    case "hard":
+      return "difícil";
+    default:
+      return "médio";
+  }
+}
+
+function feedbackQuality(feedback: LessonDifficultyFeedback | null): number {
+  switch (feedback) {
+    case "easy":
+      return 5;
+    case "medium":
+      return 3;
+    case "hard":
+      return 2;
+    default:
+      return 3;
+  }
+}
+
+function formatHoursLabel(hours: number): string {
+  return hours === 1 ? "1 hora" : `${hours} horas`;
+}
+
 function buildLessonItemView(
   entry: Record<string, unknown> | null,
   fallbackStudy: StudyPackStudy | null,
@@ -306,20 +396,16 @@ function buildLessonMessage(pack: { title: string }, item: {
   exercise?: string | null;
 }): string {
   const examples = item.examples?.length
-    ? `\n\nExemplos:\n${item.examples.map((example) => `• ${example}`).join("\n")}`
+    ? `Exemplos:\n${formatBulletList(item.examples)}`
     : "";
 
-  return `
-🎯 ${pack.title}
-
-${item.content}
-${examples}
-
-🧠 Prática:
-${item.exercise ?? ""}
-
-Responda aqui no WhatsApp 👇
-`.trim();
+  return joinNonEmptyBlocks([
+    `🎯 ${pack.title}`,
+    item.content,
+    examples,
+    item.exercise ? `🧠 Prática:\n${item.exercise}` : null,
+    "Responda aqui no WhatsApp 👇",
+  ]);
 }
 
 function buildNextItemMessage(pack: { title: string }, item: {
@@ -327,15 +413,12 @@ function buildNextItemMessage(pack: { title: string }, item: {
   content: string;
   exercise?: string | null;
 }): string {
-  return `
-📌 Próxima atividade: ${item.title}
-
-${item.content}
-
-🧠 ${item.exercise ?? ""}
-
-Responda aqui 👇
-`.trim();
+  return joinNonEmptyBlocks([
+    `📌 Próxima atividade: ${item.title}`,
+    item.content,
+    item.exercise ? `🧠 ${item.exercise}` : null,
+    "Responda aqui 👇",
+  ]);
 }
 
 function buildCorrectionMessage(input: {
@@ -345,27 +428,30 @@ function buildCorrectionMessage(input: {
     examples?: string[] | null;
     exercise?: string | null;
   };
-  studentAnswer: string;
   expectedAnswer: string;
+  alternativeAnswers?: string[];
+  encouragementMessage?: string | null;
 }): string {
+  const alternatives = (input.alternativeAnswers ?? [])
+    .map((answer) => answer.trim())
+    .filter((answer) => answer.length > 0 && answer !== input.expectedAnswer);
+
   const examples = input.currentItem.examples?.length
-    ? `\n\nExemplos:\n${input.currentItem.examples.map((example) => `• ${example}`).join("\n")}`
-    : "";
+    ? `Exemplos:\n${formatBulletList(input.currentItem.examples)}`
+    : null;
 
-  return `
-Boa tentativa 👌
-
-A forma mais natural seria:
-
-✅ ${input.expectedAnswer}
-
-Esse chunk funciona assim:
-
-${input.currentItem.content}
-${examples}
-
-Próximo desafio 👇
-`.trim();
+  return joinNonEmptyBlocks([
+    input.encouragementMessage ?? "Boa tentativa 👌",
+    "A forma mais natural seria:",
+    `✅ ${input.expectedAnswer}`,
+    alternatives.length > 0
+      ? `Outras formas possíveis:\n${formatBulletList(alternatives)}`
+      : null,
+    "Esse chunk funciona assim:",
+    input.currentItem.content,
+    examples,
+    "Próximo desafio 👇",
+  ]);
 }
 
 function normalizeStudyEntry(value: unknown, index: number): StudyPackStudy[] {
@@ -755,68 +841,42 @@ export class StudyOrchestratorService {
         ? "drill"
         : "remediate";
 
-    const analysisRequest = studyPackProviderService.buildReviewRequestPayload({
-      userId: input.userId,
-      packageId: pack.remotePackId ?? pack.packId,
-      packItemId: currentItem.itemId,
-      mode: reviewMode,
-      session_id: pack.packId,
-      lesson_goal: "translation",
-      difficulty: "easy",
-      topic: currentItem.topicKey ?? currentItem.itemId,
-      language: "pt-BR",
-      user_answer: input.text,
-      context: {
-        history_summary:
-          conceptState?.conceptSeenAt && conceptState.lastResult === "correct"
-            ? "usuário já respondeu corretamente esse conceito antes"
-            : "usuário está respondendo a um conceito em estudo",
-        last_error:
-          conceptState?.lastResult && conceptState.lastResult !== "correct"
-            ? "resposta anterior não consolidou o conceito"
-            : undefined,
-      },
-    });
-
-    const analysis = await studyPackProviderService.analyzeReviewResponse(analysisRequest);
-
-    if (!analysis) {
-      return {
-        kind: "ignored",
-      };
-    }
-
     const now = new Date();
-    const earnedXp = analysis.data.xp ?? 0;
-
-    await learningEngineService.recordStudyEvent({
-      userId: input.userId,
-      itemId: currentItem.itemId,
-      packId: channel.currentPackId ?? pack.packId,
-      eventType: "ANSWERED",
-      answerQuality: scoreToQuality(analysis.data.score ?? 0),
-      isCorrect: analysis.data.correct,
-      xpEarned: analysis.data.xp ?? 0,
-    });
-
     const currentIndex = pack.studies.findIndex((study) => study.itemId === currentItem.itemId);
     const nextItem = pack.studies[currentIndex + 1] ?? null;
 
-    console.info(
-      {
-        scope: "study-orchestrator",
-        step: "handleOptInMessage",
-        userId: input.userId,
-        packId: pack.remotePackId ?? pack.packId,
-        itemId: currentItem.itemId,
-        xpEarned: earnedXp,
-        nextReviewAt: nextItem ? null : addHours(now, 2).toISOString(),
-        awaitingStudyReply: Boolean(nextItem),
-      },
-      "[study-response] processed",
-    );
-
     if (nextItem) {
+      const analysisRequest = studyPackProviderService.buildReviewRequestPayload({
+        userId: input.userId,
+        packageId: pack.remotePackId ?? pack.packId,
+        packItemId: currentItem.itemId,
+        mode: reviewMode,
+        session_id: pack.packId,
+        lesson_goal: "translation",
+        difficulty: "easy",
+        topic: currentItem.topicKey ?? currentItem.itemId,
+        language: "pt-BR",
+        user_answer: input.text,
+        context: {
+          history_summary:
+            conceptState?.conceptSeenAt && conceptState.lastResult === "correct"
+              ? "usuário já respondeu corretamente esse conceito antes"
+              : "usuário está respondendo a um conceito em estudo",
+          last_error:
+            conceptState?.lastResult && conceptState.lastResult !== "correct"
+              ? "resposta anterior não consolidou o conceito"
+              : undefined,
+        },
+      });
+
+      const analysis = await studyPackProviderService.analyzeReviewResponse(analysisRequest);
+
+      if (!analysis) {
+        return {
+          kind: "ignored",
+        };
+      }
+
       const currentRawItem = extractLessonItemByStudy(pack.rawItems, currentItem);
       const nextRawItem = extractLessonItemByStudy(pack.rawItems, nextItem);
       const expectedAnswer =
@@ -836,14 +896,40 @@ export class StudyOrchestratorService {
         },
       });
 
+      const earnedXp = analysis.data.xp ?? 0;
+      await learningEngineService.recordStudyEvent({
+        userId: input.userId,
+        itemId: currentItem.itemId,
+        packId: channel.currentPackId ?? pack.packId,
+        eventType: "ANSWERED",
+        answerQuality: scoreToQuality(analysis.data.score ?? 0),
+        isCorrect: analysis.data.correct,
+        xpEarned: analysis.data.xp ?? 0,
+      });
+
       const correctionMessage = buildCorrectionMessage({
         currentItem: buildLessonItemView(currentRawItem, currentItem),
-        studentAnswer: input.text,
         expectedAnswer,
+        alternativeAnswers: analysis.data.alternative_answers,
+        encouragementMessage: analysis.data.encouragementMessage,
       });
       const nextMessage = buildNextItemMessage(
         { title: extractPackTitle(pack.rawItems, nextItem) ?? packTitle },
         buildLessonItemView(nextRawItem, nextItem),
+      );
+
+      console.info(
+        {
+          scope: "study-orchestrator",
+          step: "handleOptInMessage",
+          userId: input.userId,
+          packId: pack.remotePackId ?? pack.packId,
+          itemId: currentItem.itemId,
+          xpEarned: earnedXp,
+          nextReviewAt: null,
+          awaitingStudyReply: Boolean(nextItem),
+        },
+        "[study-response] processed",
       );
 
       return {
@@ -858,24 +944,28 @@ export class StudyOrchestratorService {
       };
     }
 
-    const currentRawItem = extractLessonItemByStudy(pack.rawItems, currentItem);
-    const expectedAnswer =
-      extractExpectedAnswer(currentRawItem, currentItem) ||
-      analysis.data.expected_answer ||
-      analysis.data.alternative_answers[0] ||
-      currentItem.meaning ||
-      currentItem.text;
-    const correctionMessage = buildCorrectionMessage({
-      currentItem: buildLessonItemView(currentRawItem, currentItem),
-      studentAnswer: input.text,
-      expectedAnswer,
+    const feedback = normalizeLessonDifficultyFeedback(input.text);
+    const spacingHours = resolveFeedbackSpacingHours(feedback);
+    const feedbackLabelValue = feedbackLabel(feedback);
+    const nextReviewAt = addHours(now, spacingHours);
+    const previousItem = pack.studies[currentIndex - 1] ?? currentItem;
+
+    await learningEngineService.recordStudyEvent({
+      userId: input.userId,
+      itemId: previousItem.itemId,
+      packId: channel.currentPackId ?? pack.packId,
+      eventType: "LESSON_COMPLETED",
+      answerQuality: feedbackQuality(feedback),
+      isCorrect: null,
+      xpEarned: 0,
     });
-    const retryMessage = [
-      correctionMessage,
-      "",
+
+    const retryMessage = joinNonEmptyBlocks([
+      `Entendi: ${feedbackLabelValue}.`,
+      `Vou ajustar o próximo review para daqui a ${formatHoursLabel(spacingHours)}.`,
       "Seu pack terminou por agora.",
-      "Vou reagendar esse mesmo pack para daqui a 2 horas.",
-    ].join("\n");
+      `Vou reagendar esse mesmo pack para daqui a ${formatHoursLabel(spacingHours)}.`,
+    ]);
 
     await prisma.userChannel.update({
       where: { userId: input.userId },
@@ -891,7 +981,7 @@ export class StudyOrchestratorService {
       where: { id: pack.packId },
       data: {
         completed: true,
-        nextReviewAt: addHours(now, 2),
+        nextReviewAt,
         reviewCount: {
           increment: 1,
         },
@@ -904,24 +994,24 @@ export class StudyOrchestratorService {
         step: "handleOptInMessage",
         userId: input.userId,
         packId: pack.remotePackId ?? pack.packId,
-        itemId: currentItem.itemId,
-        xpEarned: earnedXp,
-        nextReviewAt: addHours(now, 2).toISOString(),
+        itemId: previousItem.itemId,
+        feedback: feedbackLabelValue,
+        nextReviewAt: nextReviewAt.toISOString(),
         awaitingStudyReply: false,
       },
       "[study-response] scheduled review",
     );
 
-      return {
-        kind: "study",
-        replyText: retryMessage,
-        answerQuality: scoreToQuality(analysis.data.score ?? 0),
-        confidence: analysis.data.score ? Math.min(1, Math.max(0.3, analysis.data.score / 100)) : 0.4,
-        reason: analysis.data.source,
-        packId: pack.packId,
-        itemId: currentItem.itemId,
-        awaitingStudyReply: false,
-      };
+    return {
+      kind: "study",
+      replyText: retryMessage,
+      answerQuality: feedbackQuality(feedback),
+      confidence: 0.8,
+      reason: "lesson_feedback",
+      packId: pack.packId,
+      itemId: previousItem.itemId,
+      awaitingStudyReply: false,
+    };
   }
 
   async handleOptInConversation(input: {

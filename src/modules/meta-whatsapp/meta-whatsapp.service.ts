@@ -199,7 +199,7 @@ function buildProfessionQuestion(): string {
 }
 
 function buildLevelQuestion(): string {
-  return "4. Qual seu nível atual?";
+  return "4. Qual seu nível no idioma que quer aprender?";
 }
 
 function buildLanguageQuestion(): string {
@@ -209,7 +209,7 @@ function buildLanguageQuestion(): string {
 function buildOnboardingQuestion(step: 2 | 3 | 4 | 5 | 6 | 7, goal?: LearningGoal | null): string {
   switch (step) {
     case 2:
-      return "1. O que você gosta? (ex: viagens, música, séries)";
+      return "1. Me fale do que você gosta e se acha que o inglês é uma necessidade para você.";
     case 3:
       return "2. Quais temas você prefere estudar? (ex: trabalho, rotina, tecnologia)";
     case 4:
@@ -841,15 +841,16 @@ export class MetaWhatsAppService {
     switch (channel.onboardingStep) {
       case 2: {
         const likes = splitCommaList(text);
+        const personalPreferences = likes.length > 0 ? likes : [normalizeName(text)];
 
-        if (likes.length === 0) {
+        if (personalPreferences.length === 0 || personalPreferences[0].length === 0) {
           await this.sendReply(user.phone, buildReaskMessage(2), message.messageId);
           return;
         }
 
         await this.upsertPartialKycUser({
           userId: user.id,
-          personalPreferences: likes,
+          personalPreferences,
         });
 
         await this.sendReply(user.phone, buildOnboardingQuestion(3), message.messageId);

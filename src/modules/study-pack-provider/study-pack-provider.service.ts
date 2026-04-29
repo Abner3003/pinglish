@@ -63,6 +63,7 @@ export type ReviewResultPayload = {
     packItemId: string;
     correct: boolean;
     score: number;
+    encouragementMessage: string;
     feedback: string;
     corrections: string[];
     expected_answer: string;
@@ -372,6 +373,14 @@ function extractAnalysisData(payload: unknown): ReviewResultPayload["data"] | nu
     : Array.isArray(data.tips)
       ? data.tips.filter((tip): tip is string => typeof tip === "string")
       : [];
+  const encouragementMessage =
+    getString(data.encouragementMessage) ??
+    getString(data.encouragement_message) ??
+    getString(data.encouragement) ??
+    getString(payload.encouragementMessage) ??
+    getString(payload.encouragement_message) ??
+    getString(payload.encouragement) ??
+    "";
   const expectedAnswer =
     getString(data.expectedAnswer) ??
     getString(data.expected_answer) ??
@@ -388,6 +397,7 @@ function extractAnalysisData(payload: unknown): ReviewResultPayload["data"] | nu
     packItemId: getString(data.packItemId) ?? getString(payload.packItemId) ?? getString(payload.topic) ?? "",
     correct,
     score: normalizedScore,
+    encouragementMessage,
     feedback: getString(data.feedback) ?? getString(data.feedback_message) ?? "",
     corrections,
     expected_answer: expectedAnswer,
@@ -470,6 +480,17 @@ async function buildFallbackAnalysis(input: ReviewRequestPayload): Promise<Revie
             ? "incorrect"
             : "unclear";
 
+  const encouragementMessage =
+    classifierResult.answerQuality >= 4
+      ? "Boa resposta."
+      : classifierResult.answerQuality === 3
+        ? "Boa tentativa. Você acertou parte da ideia."
+        : classifierResult.answerQuality === 2
+          ? "Boa tentativa. Você está perto da forma natural."
+          : classifierResult.answerQuality === 1
+            ? "Boa tentativa. Falta ajustar o chunk principal."
+            : "Boa tentativa. Vamos lapidar isso juntos.";
+
   return {
     schema_version: "v1",
     response_type: "review_result",
@@ -479,6 +500,7 @@ async function buildFallbackAnalysis(input: ReviewRequestPayload): Promise<Revie
     packItemId: input.packItemId,
     correct: classifierResult.answerQuality >= 4,
     score,
+    encouragementMessage,
     xp: classifierResult.answerQuality >= 4 ? 15 : classifierResult.answerQuality === 3 ? 9 : classifierResult.answerQuality === 2 ? 6 : classifierResult.answerQuality === 1 ? 3 : 0,
     feedback:
       classifierResult.answerQuality >= 4
