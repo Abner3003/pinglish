@@ -94,6 +94,8 @@ type BotReplyInput = {
 
 type LessonDifficultyFeedback = "easy" | "medium" | "hard";
 
+const LESSON_FEEDBACK_ITEM_ID = "__lesson_feedback__";
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -277,6 +279,33 @@ function joinNonEmptyBlocks(blocks: Array<string | null | undefined>): string {
   return blocks.filter((block): block is string => typeof block === "string" && block.trim().length > 0).join("\n\n");
 }
 
+function formatChoiceText(value: string): string {
+  return value
+    .replace(/\s+([A-D])\)\s*/g, "\n• $1) ")
+    .replace(/\s+([A-D])\.\s*/g, "\n• $1. ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function formatAlternativeTopics(alternatives: string[]): string {
+  const cleanAlternatives = alternatives
+    .map((answer) => answer.trim())
+    .filter((answer) => answer.length > 0);
+
+  if (cleanAlternatives.length === 0) {
+    return "";
+  }
+
+  return `Alternativas:\n${cleanAlternatives.map((answer) => `• ${formatChoiceText(answer)}`).join("\n")}`;
+}
+
+function buildLessonFeedbackQuestion(): string {
+  return joinNonEmptyBlocks([
+    "📊 Como você achou o nível da lição?",
+    "Responda com: fácil, médio ou difícil.",
+  ]);
+}
+
 function normalizeLessonDifficultyFeedback(value: string): LessonDifficultyFeedback | null {
   const normalized = normalizeText(value);
 
@@ -424,7 +453,7 @@ function buildLessonMessage(pack: { title: string }, item: {
 
   return joinNonEmptyBlocks([
     `🎯 ${pack.title}`,
-    item.content,
+    formatChoiceText(item.content),
     examples,
     item.exercise ? `🧠 Prática:\n${item.exercise}` : null,
     "Responda aqui no WhatsApp 👇",
@@ -434,11 +463,17 @@ function buildLessonMessage(pack: { title: string }, item: {
 function buildNextItemMessage(pack: { title: string }, item: {
   title: string;
   content: string;
+  examples?: string[] | null;
   exercise?: string | null;
 }): string {
+  const examples = item.examples?.length
+    ? `Exemplos:\n${formatBulletList(item.examples)}`
+    : "";
+
   return joinNonEmptyBlocks([
     `📌 Próxima atividade: ${item.title}`,
-    item.content,
+    formatChoiceText(item.content),
+    examples,
     item.exercise ? `🧠 ${item.exercise}` : null,
     "Responda aqui 👇",
   ]);
@@ -462,17 +497,19 @@ function buildCorrectionMessage(input: {
   const examples = input.currentItem.examples?.length
     ? `Exemplos:\n${formatBulletList(input.currentItem.examples)}`
     : null;
+  const practice = input.currentItem.exercise
+    ? `🧠 Prática:\n${input.currentItem.exercise}`
+    : null;
 
   return joinNonEmptyBlocks([
     input.encouragementMessage ?? "Boa tentativa 👌",
     "A forma mais natural seria:",
     `✅ ${input.expectedAnswer}`,
-    alternatives.length > 0
-      ? `Outras formas possíveis:\n${formatBulletList(alternatives)}`
-      : null,
+    alternatives.length > 0 ? formatAlternativeTopics(alternatives) : null,
     "Esse chunk funciona assim:",
-    input.currentItem.content,
+    formatChoiceText(input.currentItem.content),
     examples,
+    practice,
     "Próximo desafio 👇",
   ]);
 }
@@ -827,9 +864,104 @@ export class StudyOrchestratorService {
         kind: "ignored",
       };
     }
+    const now = new Date();
     const currentItem = pack.studies.find((study) => study.itemId === channel.currentStudyItemId);
+    const awaitingLessonFeedback = channel.currentStudyItemId === LESSON_FEEDBACK_ITEM_ID;
 
     if (!currentItem) {
+      if (awaitingLessonFeedback) {
+        const lastItem = pack.studies[pack.studies.length - 1] ?? null;
+
+        if (!lastItem) {
+          await prisma.userChannel.update({
+            where: { userId: input.userId },
+            data: {
+              awaitingStudyReply: false,
+              currentPackId: pack.packId,
+              currentStudyItemId: null,
+            },
+          });
+
+          return {
+            kind: "ignored",
+          };
+        }
+
+        const feedback = normalizeLessonDifficultyFeedback(input.text);
+        const spacingMinutes = resolveFeedbackSpacingMinutes({
+          feedback,
+          reviewCount: pack.reviewCount,
+        });
+        const feedbackLabelValue = feedbackLabel(feedback);
+        const nextReviewAt = new Date(now.getTime() + spacingMinutes * 60 * 1000);
+        const previousItem = lastItem;
+
+        await learningEngineService.recordStudyEvent({
+          userId: input.userId,
+          itemId: previousItem.itemId,
+          packId: channel.currentPackId ?? pack.packId,
+          eventType: "LESSON_COMPLETED",
+          answerQuality: feedbackQuality(feedback),
+          isCorrect: null,
+          xpEarned: 0,
+        });
+
+        const retryMessage = joinNonEmptyBlocks([
+          pack.reviewCount === 0
+            ? "Fechado. A próxima revisão vai acontecer em 5 minutos para manter o engajamento."
+            : `Entendi: ${feedbackLabelValue}. Vou ajustar o próximo review para daqui a ${formatMinutesLabel(spacingMinutes)}.`,
+          "Seu pack terminou por agora.",
+          `Vou reagendar esse mesmo pack para daqui a ${formatMinutesLabel(spacingMinutes)}.`,
+        ]);
+
+        await prisma.userChannel.update({
+          where: { userId: input.userId },
+          data: {
+            awaitingStudyReply: false,
+            currentPackId: pack.packId,
+            currentStudyItemId: null,
+            lastOutboundAt: now,
+          },
+        });
+
+        await prisma.dailyStudyPack.update({
+          where: { id: pack.packId },
+          data: {
+            completed: true,
+            nextReviewAt,
+            reviewCount: {
+              increment: 1,
+            },
+          },
+        });
+
+        console.info(
+          {
+            scope: "study-orchestrator",
+            step: "handleOptInMessage",
+            userId: input.userId,
+            packId: pack.remotePackId ?? pack.packId,
+            itemId: previousItem.itemId,
+            feedback: feedbackLabelValue,
+            nextReviewAt: nextReviewAt.toISOString(),
+            reviewCount: pack.reviewCount,
+            awaitingStudyReply: false,
+          },
+          "[study-response] scheduled review",
+        );
+
+        return {
+          kind: "study",
+          replyText: retryMessage,
+          answerQuality: feedbackQuality(feedback),
+          confidence: 0.8,
+          reason: "lesson_feedback",
+          packId: pack.packId,
+          itemId: previousItem.itemId,
+          awaitingStudyReply: false,
+        };
+      }
+
       await prisma.userChannel.update({
         where: { userId: input.userId },
         data: {
@@ -862,7 +994,6 @@ export class StudyOrchestratorService {
         ? "drill"
         : "remediate";
 
-    const now = new Date();
     const currentIndex = pack.studies.findIndex((study) => study.itemId === currentItem.itemId);
     const nextItem = pack.studies[currentIndex + 1] ?? null;
 
@@ -934,10 +1065,50 @@ export class StudyOrchestratorService {
         alternativeAnswers: analysis.data.alternative_answers,
         encouragementMessage: analysis.data.encouragementMessage,
       });
-      const nextMessage = buildNextItemMessage(
-        { title: extractPackTitle(pack.rawItems, nextItem) ?? packTitle },
-        buildLessonItemView(nextRawItem, nextItem),
-      );
+      const nextMessage = nextItem
+        ? buildNextItemMessage(
+            { title: extractPackTitle(pack.rawItems, nextItem) ?? packTitle },
+            buildLessonItemView(nextRawItem, nextItem),
+          )
+        : buildLessonFeedbackQuestion();
+
+      if (nextItem) {
+        console.info(
+          {
+            scope: "study-orchestrator",
+            step: "handleOptInMessage",
+            userId: input.userId,
+            packId: pack.remotePackId ?? pack.packId,
+            itemId: currentItem.itemId,
+            xpEarned: earnedXp,
+            nextReviewAt: null,
+            awaitingStudyReply: Boolean(nextItem),
+          },
+          "[study-response] processed",
+        );
+
+        return {
+          kind: "study",
+          replyText: correctionMessage,
+          followUpReplyText: nextMessage,
+          answerQuality: scoreToQuality(analysis.data.score ?? 0),
+          confidence: analysis.data.score ? Math.min(1, Math.max(0.3, analysis.data.score / 100)) : 0.4,
+          reason: analysis.data.source,
+          packId: pack.packId,
+          itemId: nextItem.itemId,
+          awaitingStudyReply: true,
+        };
+      }
+
+      await prisma.userChannel.update({
+        where: { userId: input.userId },
+        data: {
+          awaitingStudyReply: true,
+          currentPackId: pack.packId,
+          currentStudyItemId: LESSON_FEEDBACK_ITEM_ID,
+          lastOutboundAt: new Date(),
+        },
+      });
 
       console.info(
         {
@@ -948,7 +1119,7 @@ export class StudyOrchestratorService {
           itemId: currentItem.itemId,
           xpEarned: earnedXp,
           nextReviewAt: null,
-          awaitingStudyReply: Boolean(nextItem),
+          awaitingStudyReply: true,
         },
         "[study-response] processed",
       );
@@ -961,7 +1132,7 @@ export class StudyOrchestratorService {
         confidence: analysis.data.score ? Math.min(1, Math.max(0.3, analysis.data.score / 100)) : 0.4,
         reason: analysis.data.source,
         packId: pack.packId,
-        itemId: nextItem.itemId,
+        itemId: currentItem.itemId,
         awaitingStudyReply: true,
       };
     }
@@ -973,7 +1144,7 @@ export class StudyOrchestratorService {
     });
     const feedbackLabelValue = feedbackLabel(feedback);
     const nextReviewAt = new Date(now.getTime() + spacingMinutes * 60 * 1000);
-    const previousItem = pack.studies[currentIndex - 1] ?? currentItem;
+    const previousItem = pack.studies[pack.studies.length - 1] ?? currentItem;
 
     await learningEngineService.recordStudyEvent({
       userId: input.userId,
