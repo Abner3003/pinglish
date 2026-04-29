@@ -121,7 +121,10 @@ function resolveGoal(value: string): LearningGoal {
   if (
     normalized.includes("work") ||
     normalized.includes("trabalho") ||
-    normalized.includes("profissao")
+    normalized.includes("profissao") ||
+    normalized.includes("profissional") ||
+    normalized.includes("carreira") ||
+    normalized.includes("job")
   ) {
     return LearningGoal.WORK;
   }
