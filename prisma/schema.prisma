@@ -84,6 +84,7 @@ model KycUser {
   language            String
   languageLevel       String
   goal                LearningGoal?
+  profession          String?
   city                String?
   state               String?
   age                 Int?

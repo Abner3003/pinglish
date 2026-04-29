@@ -191,7 +191,19 @@ function resolveTargetLanguage(value: string): string {
   return value.trim().toUpperCase();
 }
 
-function buildOnboardingQuestion(step: 2 | 3 | 4 | 5 | 6): string {
+function buildProfessionQuestion(): string {
+  return "4. Qual é a sua profissão?";
+}
+
+function buildLevelQuestion(): string {
+  return "4. Qual seu nível atual?";
+}
+
+function buildLanguageQuestion(): string {
+  return "5. Qual idioma você quer aprender? (inglês, espanhol ou francês)";
+}
+
+function buildOnboardingQuestion(step: 2 | 3 | 4 | 5 | 6 | 7, goal?: LearningGoal | null): string {
   switch (step) {
     case 2:
       return "1. O que você gosta? (ex: viagens, música, séries)";
@@ -200,9 +212,11 @@ function buildOnboardingQuestion(step: 2 | 3 | 4 | 5 | 6): string {
     case 4:
       return "3. Qual é seu objetivo com o idioma?";
     case 5:
-      return "4. Qual seu nível atual?";
+      return goal === LearningGoal.WORK ? buildProfessionQuestion() : buildLevelQuestion();
     case 6:
-      return "5. Qual idioma você quer aprender? (inglês, espanhol ou francês)";
+      return goal === LearningGoal.WORK ? buildLevelQuestion() : buildLanguageQuestion();
+    case 7:
+      return buildLanguageQuestion();
   }
 }
 
@@ -218,14 +232,14 @@ function buildNameQuestion(): string {
   return "Para começarmos, me diga seu nome.";
 }
 
-function buildReaskMessage(step: 1 | 2 | 3 | 4 | 5 | 6): string {
+function buildReaskMessage(step: 1 | 2 | 3 | 4 | 5 | 6 | 7, goal?: LearningGoal | null): string {
   if (step === 1) {
     return buildNameQuestion();
   }
 
   return [
     "Não consegui entender sua resposta.",
-    buildOnboardingQuestion(step as 2 | 3 | 4 | 5 | 6),
+    buildOnboardingQuestion(step as 2 | 3 | 4 | 5 | 6 | 7, goal),
   ].join("\n\n");
 }
 
@@ -394,11 +408,13 @@ export class MetaWhatsAppService {
     language?: string;
     languageLevel?: string;
     goal?: LearningGoal | null;
+    profession?: string;
   }): Promise<{
     personalPreferences: string[];
     language: string;
     languageLevel: string;
     goal: LearningGoal | null;
+    profession: string | null;
   }> {
     const existing = await prisma.kycUser.findUnique({
       where: {
@@ -409,6 +425,7 @@ export class MetaWhatsAppService {
         language: true,
         languageLevel: true,
         goal: true,
+        profession: true,
       },
     });
 
@@ -419,6 +436,8 @@ export class MetaWhatsAppService {
     const language = input.language ?? existing?.language ?? "";
     const languageLevel = input.languageLevel ?? existing?.languageLevel ?? "";
     const goal = input.goal ?? existing?.goal ?? null;
+    const profession = input.profession ?? existing?.profession ?? null;
+    const shouldPersistProfession = input.profession !== undefined || existing?.profession !== undefined;
 
     const kycUser = await prisma.kycUser.upsert({
       where: {
@@ -429,6 +448,7 @@ export class MetaWhatsAppService {
         language,
         languageLevel,
         goal,
+        ...(shouldPersistProfession ? { profession } : {}),
       },
       create: {
         userId: input.userId,
@@ -436,12 +456,14 @@ export class MetaWhatsAppService {
         language,
         languageLevel,
         goal,
+        ...(shouldPersistProfession ? { profession } : {}),
       },
       select: {
         personalPreferences: true,
         language: true,
         languageLevel: true,
         goal: true,
+        profession: true,
       },
     });
 
@@ -867,12 +889,12 @@ export class MetaWhatsAppService {
         break;
       }
       case 4: {
-        await this.upsertPartialKycUser({
+        const kycUser = await this.upsertPartialKycUser({
           userId: user.id,
           goal: resolveGoal(text),
         });
 
-        await this.sendReply(user.phone, buildOnboardingQuestion(5), message.messageId);
+        await this.sendReply(user.phone, buildOnboardingQuestion(5, kycUser.goal), message.messageId);
 
         await prisma.userChannel.update({
           where: {
@@ -886,6 +908,46 @@ export class MetaWhatsAppService {
         break;
       }
       case 5: {
+        const currentKyc = await prisma.kycUser.findUnique({
+          where: {
+            userId: user.id,
+          },
+          select: {
+            goal: true,
+          },
+        });
+
+        if (currentKyc?.goal === LearningGoal.WORK) {
+          const profession = normalizeName(text);
+
+          if (!profession) {
+            await this.sendReply(
+              user.phone,
+              buildReaskMessage(5, LearningGoal.WORK),
+              message.messageId,
+            );
+            return;
+          }
+
+          await this.upsertPartialKycUser({
+            userId: user.id,
+            profession,
+          });
+
+          await this.sendReply(user.phone, buildOnboardingQuestion(6, LearningGoal.WORK), message.messageId);
+
+          await prisma.userChannel.update({
+            where: {
+              userId: user.id,
+            },
+            data: {
+              onboardingStep: 6,
+            },
+          });
+
+          break;
+        }
+
         const tenantId = await resolveDefaultTenantId();
         const normalizedLevel = await this.normalizeReceivedLevel({
           rawLevel: text,
@@ -913,6 +975,131 @@ export class MetaWhatsAppService {
         break;
       }
       case 6: {
+        const currentKyc = await prisma.kycUser.findUnique({
+          where: {
+            userId: user.id,
+          },
+          select: {
+            goal: true,
+          },
+        });
+
+        if (currentKyc?.goal === LearningGoal.WORK) {
+          if (!normalizeName(text)) {
+            await this.sendReply(
+              user.phone,
+              buildReaskMessage(6, LearningGoal.WORK),
+              message.messageId,
+            );
+            return;
+          }
+
+          const tenantId = await resolveDefaultTenantId();
+          const normalizedLevel = await this.normalizeReceivedLevel({
+            rawLevel: text,
+            tenantId,
+            targetLanguage: null,
+            nativeLanguage: "PT-BR",
+          });
+
+          await this.upsertPartialKycUser({
+            userId: user.id,
+            languageLevel: normalizedLevel,
+          });
+
+          await this.sendReply(user.phone, buildOnboardingQuestion(7, LearningGoal.WORK), message.messageId);
+
+          await prisma.userChannel.update({
+            where: {
+              userId: user.id,
+            },
+            data: {
+              onboardingStep: 7,
+            },
+          });
+
+          break;
+        }
+
+        const kycUser = await this.upsertPartialKycUser({
+          userId: user.id,
+          language: resolveTargetLanguage(text),
+        });
+
+        const tenantId = await resolveDefaultTenantId();
+
+        await prisma.learningProfile.upsert({
+          where: {
+            userId: user.id,
+          },
+          update: {
+            timezone: "America/Sao_Paulo",
+            nativeLanguage: "PT-BR",
+            targetLanguage: kycUser.language,
+            goal: kycUser.goal ?? LearningGoal.OTHER,
+            interests: kycUser.personalPreferences,
+            ...(tenantId !== null ? { tenantId } : {}),
+          },
+          create: {
+            userId: user.id,
+            ...(tenantId !== null ? { tenantId } : {}),
+            timezone: "America/Sao_Paulo",
+            nativeLanguage: "PT-BR",
+            targetLanguage: kycUser.language,
+            goal: kycUser.goal ?? LearningGoal.OTHER,
+            interests: kycUser.personalPreferences,
+          },
+        });
+
+        await this.sendReply(
+          user.phone,
+          [
+            "Tudo certo por aqui ✅",
+            "Seu cadastro foi concluído e agora estou preparando sua primeira atividade.",
+            "Já vou continuar com seu estudo por aqui.",
+          ].join("\n\n"),
+          message.messageId,
+        );
+
+        const studySession = await studyOrchestratorService.startDailyStudySession(user.id, {
+          forceRegenerate: true,
+        });
+
+        if (!studySession) {
+          this.logger.warn(
+            `[meta-whatsapp] study session unavailable phone=${phone} userId=${user.id}`,
+          );
+          await this.sendReply(
+            user.phone,
+            "Seu cadastro foi concluído, mas ainda estou preparando sua próxima atividade. Assim que ela ficar pronta, eu sigo daqui.",
+            message.messageId,
+          );
+          return;
+        }
+
+        if (!studySession.replyText) {
+          await this.sendReply(
+            user.phone,
+            "Seu cadastro foi concluído, mas ainda estou montando a primeira atividade para você.",
+            message.messageId,
+          );
+          return;
+        }
+
+        await this.sendReply(user.phone, studySession.replyText, message.messageId);
+
+        this.logger.info(
+          `[meta-whatsapp] onboarding completed phone=${phone} userId=${user.id} packId=${studySession.packId ?? "n/a"}`,
+        );
+
+        return;
+      }
+      case 7: {
+        if (!normalizeName(text)) {
+          await this.sendReply(user.phone, buildReaskMessage(7, LearningGoal.WORK), message.messageId);
+          return;
+        }
+
         const kycUser = await this.upsertPartialKycUser({
           userId: user.id,
           language: resolveTargetLanguage(text),
